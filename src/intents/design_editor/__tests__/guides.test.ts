@@ -14,10 +14,14 @@ const solid = (color: string) => ({
   fill: { colorContainer: { type: "solid", color } },
 });
 
+/** A shape carries a fill per path. */
 const shape = (color: string) => ({
   type: "shape",
   paths: { toArray: () => [solid(color)] },
 });
+
+/** A rect carries one fill on the element itself. */
+const rect = (color: string) => ({ type: "rect", ...solid(color) });
 
 describe("guideLines", () => {
   it("marks every seam and flanks each with a margin pair", () => {
@@ -102,24 +106,27 @@ describe("buildGuideElements", () => {
 });
 
 describe("isGuideElement", () => {
-  it("recognises its own guides", () => {
+  it("recognises a guide that came back as a shape", () => {
     expect(isGuideElement(shape(GUIDE_COLOR))).toBe(true);
+  });
+
+  it("recognises a guide that came back as a rect", () => {
+    expect(isGuideElement(rect(GUIDE_COLOR))).toBe(true);
   });
 
   it("matches regardless of hex casing", () => {
     expect(isGuideElement(shape(GUIDE_COLOR.toLowerCase()))).toBe(true);
+    expect(isGuideElement(rect(GUIDE_COLOR.toLowerCase()))).toBe(true);
   });
 
   it("leaves the user's shapes alone", () => {
     expect(isGuideElement(shape("#FF0099"))).toBe(false);
+    expect(isGuideElement(rect("#FF0099"))).toBe(false);
   });
 
-  it("ignores elements that are not shapes", () => {
+  it("ignores elements with no fill to read", () => {
     expect(isGuideElement({ type: "text" })).toBe(false);
     expect(isGuideElement({ type: "image" })).toBe(false);
-  });
-
-  it("survives a shape with no solid fill", () => {
     expect(
       isGuideElement({
         type: "shape",
@@ -127,12 +134,36 @@ describe("isGuideElement", () => {
       }),
     ).toBe(false);
   });
+
+  it("survives an element shaped nothing like the SDK's", () => {
+    expect(isGuideElement(undefined)).toBe(false);
+    expect(isGuideElement({})).toBe(false);
+    expect(isGuideElement({ type: "shape", paths: {} })).toBe(false);
+  });
+
+  describe("when Canva reports the element as unsupported", () => {
+    const sliver = { type: "unsupported", top: 0, width: 4, height: 1350 };
+
+    it("falls back to the shape a guide has", () => {
+      expect(isGuideElement(sliver, 1350)).toBe(true);
+    });
+
+    it("needs the page height to risk that fallback", () => {
+      expect(isGuideElement(sliver)).toBe(false);
+    });
+
+    it("spares anything that is not a full-height sliver", () => {
+      expect(isGuideElement({ ...sliver, width: 400 }, 1350)).toBe(false);
+      expect(isGuideElement({ ...sliver, height: 200 }, 1350)).toBe(false);
+      expect(isGuideElement({ ...sliver, top: 300 }, 1350)).toBe(false);
+    });
+  });
 });
 
 describe("removeGuides", () => {
   const mockOpenDesign = jest.mocked(openDesign);
 
-  const runWith = (elements: unknown[]) => {
+  const runWith = (elements: unknown[], pageHeight = PAGE.height) => {
     const deleted: unknown[] = [];
     const list = {
       toArray: () => elements,
@@ -145,7 +176,11 @@ describe("removeGuides", () => {
       callback: (session: unknown) => Promise<void>,
     ) => {
       await callback({
-        page: { type: "absolute", elements: list },
+        page: {
+          type: "absolute",
+          dimensions: { width: PAGE.width, height: pageHeight },
+          elements: list,
+        },
         helpers: {},
         sync,
       });
@@ -156,16 +191,29 @@ describe("removeGuides", () => {
 
   beforeEach(() => jest.clearAllMocks());
 
-  it("deletes the guides and leaves everything else", async () => {
+  it("deletes shape guides and leaves everything else", async () => {
     const mine = shape(GUIDE_COLOR);
     const theirs = shape("#123456");
-    const text = { type: "text" };
-    const { deleted } = runWith([mine, theirs, text]);
+    const { deleted } = runWith([mine, theirs, { type: "text" }]);
 
-    const removed = await removeGuides();
-
-    expect(removed).toBe(1);
+    expect((await removeGuides()).removed).toBe(1);
     expect(deleted).toEqual([mine]);
+  });
+
+  it("deletes rect guides too, which is what was being missed", async () => {
+    const mine = rect(GUIDE_COLOR);
+    const { deleted } = runWith([mine, rect("#123456")]);
+
+    expect((await removeGuides()).removed).toBe(1);
+    expect(deleted).toEqual([mine]);
+  });
+
+  it("clears a whole set in one pass", async () => {
+    const guides = [shape(GUIDE_COLOR), rect(GUIDE_COLOR), shape(GUIDE_COLOR)];
+    const { deleted } = runWith([...guides, { type: "text" }]);
+
+    expect((await removeGuides()).removed).toBe(3);
+    expect(deleted).toHaveLength(3);
   });
 
   it("persists the deletion", async () => {
@@ -179,9 +227,18 @@ describe("removeGuides", () => {
   it("does not touch the design when there is nothing to remove", async () => {
     const { deleted, sync } = runWith([shape("#123456")]);
 
-    expect(await removeGuides()).toBe(0);
+    expect((await removeGuides()).removed).toBe(0);
     expect(deleted).toEqual([]);
     expect(sync).not.toHaveBeenCalled();
+  });
+
+  it("reports what it saw, so a miss can be explained", async () => {
+    runWith([rect("#123456"), { type: "text" }]);
+
+    const { removed, seen } = await removeGuides();
+
+    expect(removed).toBe(0);
+    expect(seen).toEqual(["rect #123456", "text"]);
   });
 
   it("does nothing on a page type it cannot edit", async () => {
@@ -193,7 +250,7 @@ describe("removeGuides", () => {
       await callback({ page: { type: "unsupported" }, helpers: {}, sync });
     }) as unknown as typeof openDesign);
 
-    expect(await removeGuides()).toBe(0);
+    expect((await removeGuides()).removed).toBe(0);
     expect(sync).not.toHaveBeenCalled();
   });
 });

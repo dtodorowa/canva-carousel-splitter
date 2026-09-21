@@ -93,52 +93,105 @@ export function buildGuideElements(
   }));
 }
 
-type MaybeGuide = {
-  type: string;
-  paths?: { toArray: () => readonly { fill: PathFill }[] };
-};
+/**
+ * Every solid fill colour on an element, upper-cased.
+ *
+ * Rects carry one fill directly; shapes carry one per path. A guide added
+ * through `addPage` can come back as either, so read both rather than assume.
+ */
+function solidColors(element: unknown): string[] {
+  const found: string[] = [];
+  const record = (fill: unknown) => {
+    const container = (fill as { colorContainer?: unknown } | undefined)
+      ?.colorContainer as { type?: string; color?: string } | undefined;
 
-type PathFill = {
-  colorContainer?: { type: string; color?: string } | undefined;
-};
+    if (container?.type === "solid" && typeof container.color === "string") {
+      found.push(container.color.toUpperCase());
+    }
+  };
 
-/** A shape whose fill is the sentinel colour is one of ours. */
-export function isGuideElement(element: MaybeGuide): boolean {
-  if (element.type !== "shape" || !element.paths) {
-    return false;
+  const candidate = element as {
+    fill?: unknown;
+    paths?: { toArray?: () => readonly { fill?: unknown }[] };
+  };
+
+  record(candidate?.fill);
+
+  if (typeof candidate?.paths?.toArray === "function") {
+    for (const path of candidate.paths.toArray()) {
+      record(path?.fill);
+    }
   }
 
-  return element.paths.toArray().some((path) => {
-    const container = path.fill?.colorContainer;
+  return found;
+}
 
-    return (
-      container?.type === "solid" &&
-      container.color?.toUpperCase() === GUIDE_COLOR
-    );
-  });
+/** A full-height sliver at the very top of the page, the shape a guide is. */
+function looksLikeGuideGeometry(element: unknown, pageHeight: number): boolean {
+  const { top, width, height } = (element ?? {}) as Partial<{
+    top: number;
+    width: number;
+    height: number;
+  }>;
+
+  return (
+    typeof top === "number" &&
+    typeof width === "number" &&
+    typeof height === "number" &&
+    Math.abs(top) < 1 &&
+    width <= 8 &&
+    Math.abs(height - pageHeight) < 1
+  );
 }
 
 /**
- * Strip the guides off the current page.
- *
- * Called before the page is exported, so guides can never end up baked into a
- * slide. Returns how many were removed so the caller can put them back if the
- * split then fails.
+ * A guide is anything filled with the sentinel colour. An element Canva reports
+ * as unsupported exposes no fill to check, so fall back to its shape — narrow
+ * enough that only a full-height sliver qualifies.
  */
-export async function removeGuides(): Promise<number> {
+export function isGuideElement(element: unknown, pageHeight?: number): boolean {
+  if (solidColors(element).includes(GUIDE_COLOR)) {
+    return true;
+  }
+
+  const type = (element as { type?: string } | undefined)?.type;
+
+  return (
+    type === "unsupported" &&
+    pageHeight != null &&
+    looksLikeGuideGeometry(element, pageHeight)
+  );
+}
+
+export type GuideScan = {
+  removed: number;
+  /** Element types found on the page, so a failed match can be diagnosed. */
+  seen: string[];
+};
+
+export async function removeGuides(): Promise<GuideScan> {
   let removed = 0;
+  const seen: string[] = [];
 
   await openDesign({ type: "current_page" }, async (session) => {
     const page = session.page;
 
     if (page.type !== "absolute") {
+      seen.push(page.type);
+
       return;
     }
 
+    const pageHeight = page.dimensions?.height;
+
     for (const element of page.elements.toArray()) {
-      if (isGuideElement(element as unknown as MaybeGuide)) {
+      const described = describe(element);
+
+      if (isGuideElement(element, pageHeight)) {
         page.elements.delete(element);
         removed++;
+      } else {
+        seen.push(described);
       }
     }
 
@@ -147,5 +200,13 @@ export async function removeGuides(): Promise<number> {
     }
   });
 
-  return removed;
+  return { removed, seen };
+}
+
+/** Short label used only to explain why nothing matched. */
+function describe(element: unknown): string {
+  const type = (element as { type?: string } | undefined)?.type ?? "unknown";
+  const colors = solidColors(element);
+
+  return colors.length > 0 ? `${type} ${colors[0]}` : type;
 }

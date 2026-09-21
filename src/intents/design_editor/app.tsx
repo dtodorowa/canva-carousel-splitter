@@ -57,7 +57,7 @@ type Status =
   | { kind: "done"; count: number }
   | { kind: "canvasAdded"; width: number; height: number }
   | { kind: "guidesAdded" }
-  | { kind: "guidesRemoved"; count: number }
+  | { kind: "guidesRemoved"; count: number; seen: string[] }
   | { kind: "error"; message: string };
 
 export const App = () => {
@@ -200,8 +200,8 @@ export const App = () => {
     setStatus({ kind: "idle" });
 
     try {
-      const removed = await removeGuides();
-      setStatus({ kind: "guidesRemoved", count: removed });
+      const { removed, seen } = await removeGuides();
+      setStatus({ kind: "guidesRemoved", count: removed, seen });
     } catch (error) {
       setStatus({ kind: "error", message: describeError(error) });
     } finally {
@@ -545,7 +545,7 @@ export const App = () => {
         )}
 
         {status.kind === "guidesRemoved" && (
-          <Alert tone="positive">
+          <Alert tone={status.count > 0 ? "positive" : "warn"}>
             {status.count > 0
               ? intl.formatMessage(
                   {
@@ -554,10 +554,15 @@ export const App = () => {
                   },
                   { count: status.count },
                 )
-              : intl.formatMessage({
-                  defaultMessage: "There were no guides on this page.",
-                  description: "Shown when there was nothing to remove",
-                })}
+              : intl.formatMessage(
+                  {
+                    defaultMessage:
+                      "No guides found. This page has: {seen}.",
+                    description:
+                      "Shown when nothing matched, listing what was on the page",
+                  },
+                  { seen: status.seen.join(", ") || "nothing on it" },
+                )}
           </Alert>
         )}
 
