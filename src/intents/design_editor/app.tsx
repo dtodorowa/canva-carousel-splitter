@@ -22,7 +22,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useIntl } from "react-intl";
 import * as styles from "styles/components.css";
-import { buildGuideElements, removeGuides } from "./guides";
+import { buildGuideGroup, removeGuides } from "./guides";
 import { Preview } from "./preview";
 import type { SlideFormat } from "./slicer";
 import {
@@ -183,9 +183,7 @@ export const App = () => {
       // rather than stacking a second set of lines on the page.
       await removeGuides();
 
-      for (const element of buildGuideElements(count, currentPage)) {
-        await addElementAtPoint(element);
-      }
+      await addElementAtPoint(buildGuideGroup(count, currentPage));
 
       setStatus({ kind: "guidesAdded" });
     } catch (error) {
@@ -222,7 +220,7 @@ export const App = () => {
     try {
       await addPage({
         dimensions: { width: plan.width, height: plan.height },
-        elements: buildGuideElements(count, plan),
+        elements: [buildGuideGroup(count, plan)],
         title: intl.formatMessage(
           {
             defaultMessage: "Carousel — {count} slides",
@@ -538,7 +536,7 @@ export const App = () => {
           <Alert tone="positive">
             {intl.formatMessage({
               defaultMessage:
-                "Guides drawn. The thick lines are the slide edges; the thin pairs mark the margin to keep faces and words out of.",
+                "Guides drawn, as one group you can select and delete in one go. The thick lines are the slide edges; the thin pairs mark the margin to keep faces and words out of.",
               description: "Success message after drawing guides",
             })}
           </Alert>
@@ -556,8 +554,7 @@ export const App = () => {
                 )
               : intl.formatMessage(
                   {
-                    defaultMessage:
-                      "No guides found. This page has: {seen}.",
+                    defaultMessage: "No guides found. This page has: {seen}.",
                     description:
                       "Shown when nothing matched, listing what was on the page",
                   },

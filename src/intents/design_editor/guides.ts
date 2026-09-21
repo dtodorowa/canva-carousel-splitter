@@ -73,24 +73,35 @@ export function guideLines(count: number, page: Size): GuideLine[] {
   return lines;
 }
 
-export function buildGuideElements(
-  count: number,
-  page: Size,
-): ElementAtPoint[] {
-  return guideLines(count, page).map(({ left, width }) => ({
-    type: "shape",
-    paths: [
-      {
-        d: `M 0 0 H ${width} V ${page.height} H 0 L 0 0`,
-        fill: { dropTarget: false, color: GUIDE_COLOR },
-      },
-    ],
-    viewBox: { top: 0, left: 0, width, height: page.height },
+/**
+ * All the guides as one group, so they are a single thing to select, move or
+ * delete by hand — and a single thing to find again.
+ *
+ * Children are positioned relative to the group, and the group covers the whole
+ * page, so the line positions carry over unchanged.
+ */
+export function buildGuideGroup(count: number, page: Size): ElementAtPoint {
+  return {
+    type: "group",
     top: 0,
-    left,
-    width,
+    left: 0,
+    width: page.width,
     height: page.height,
-  }));
+    children: guideLines(count, page).map(({ left, width }) => ({
+      type: "shape",
+      paths: [
+        {
+          d: `M 0 0 H ${width} V ${page.height} H 0 L 0 0`,
+          fill: { dropTarget: false, color: GUIDE_COLOR },
+        },
+      ],
+      viewBox: { top: 0, left: 0, width, height: page.height },
+      top: 0,
+      left,
+      width,
+      height: page.height,
+    })),
+  };
 }
 
 /**
@@ -99,7 +110,7 @@ export function buildGuideElements(
  * Rects carry one fill directly; shapes carry one per path. A guide added
  * through `addPage` can come back as either, so read both rather than assume.
  */
-function solidColors(element: unknown): string[] {
+function solidColors(element: unknown, depth = 0): string[] {
   const found: string[] = [];
   const record = (fill: unknown) => {
     const container = (fill as { colorContainer?: unknown } | undefined)
@@ -120,6 +131,18 @@ function solidColors(element: unknown): string[] {
   if (typeof candidate?.paths?.toArray === "function") {
     for (const path of candidate.paths.toArray()) {
       record(path?.fill);
+    }
+  }
+
+  // Guides are added as one group, so the fills live a level down. Bounded in
+  // case a design nests groups deeply.
+  const contents = (
+    element as { contents?: { toArray?: () => readonly unknown[] } } | undefined
+  )?.contents;
+
+  if (depth < 4 && typeof contents?.toArray === "function") {
+    for (const child of contents.toArray()) {
+      found.push(...solidColors(child, depth + 1));
     }
   }
 

@@ -2,7 +2,7 @@ import { openDesign } from "@canva/design";
 import {
   GUIDE_COLOR,
   SAFE_MARGIN_FRACTION,
-  buildGuideElements,
+  buildGuideGroup,
   guideLines,
   isGuideElement,
   removeGuides,
@@ -91,16 +91,44 @@ describe("guideLines", () => {
   });
 });
 
-describe("buildGuideElements", () => {
-  it("makes one full-height shape per guide, in the sentinel colour", () => {
-    const elements = buildGuideElements(3, PAGE);
+describe("buildGuideGroup", () => {
+  const group = buildGuideGroup(3, PAGE) as {
+    type: string;
+    top: number;
+    left: number;
+    width: number;
+    height: number;
+    children: { type: string; top: number; height: number }[];
+  };
 
-    expect(elements).toHaveLength(guideLines(3, PAGE).length);
+  it("returns one group covering the page", () => {
+    expect(group).toMatchObject({
+      type: "group",
+      top: 0,
+      left: 0,
+      width: PAGE.width,
+      height: PAGE.height,
+    });
+  });
 
-    for (const element of elements) {
-      expect(element).toMatchObject({ type: "shape", top: 0 });
-      expect((element as { height: number }).height).toBe(PAGE.height);
-      expect(JSON.stringify(element)).toContain(GUIDE_COLOR);
+  it("holds one full-height shape per guide", () => {
+    expect(group.children).toHaveLength(guideLines(3, PAGE).length);
+
+    for (const child of group.children) {
+      expect(child).toMatchObject({ type: "shape", top: 0 });
+      expect(child.height).toBe(PAGE.height);
+    }
+  });
+
+  it("fills every child with the sentinel colour", () => {
+    expect(JSON.stringify(group)).toContain(GUIDE_COLOR);
+  });
+
+  it("always has enough children to be a group at all", () => {
+    for (let count = 2; count <= 10; count++) {
+      const built = buildGuideGroup(count, PAGE) as { children: unknown[] };
+
+      expect(built.children.length).toBeGreaterThanOrEqual(2);
     }
   });
 });
@@ -135,10 +163,33 @@ describe("isGuideElement", () => {
     ).toBe(false);
   });
 
+  it("recognises the group the guides are added as", () => {
+    const group = {
+      type: "group",
+      contents: { toArray: () => [shape(GUIDE_COLOR), shape(GUIDE_COLOR)] },
+    };
+
+    expect(isGuideElement(group)).toBe(true);
+  });
+
+  it("leaves a group of the user's own shapes alone", () => {
+    const group = {
+      type: "group",
+      contents: { toArray: () => [shape("#123456"), rect("#654321")] },
+    };
+
+    expect(isGuideElement(group)).toBe(false);
+  });
+
+  it("still recognises loose guides drawn by an earlier version", () => {
+    expect(isGuideElement(shape(GUIDE_COLOR))).toBe(true);
+  });
+
   it("survives an element shaped nothing like the SDK's", () => {
     expect(isGuideElement(undefined)).toBe(false);
     expect(isGuideElement({})).toBe(false);
     expect(isGuideElement({ type: "shape", paths: {} })).toBe(false);
+    expect(isGuideElement({ type: "group", contents: {} })).toBe(false);
   });
 
   describe("when Canva reports the element as unsupported", () => {
@@ -214,6 +265,17 @@ describe("removeGuides", () => {
 
     expect((await removeGuides()).removed).toBe(3);
     expect(deleted).toHaveLength(3);
+  });
+
+  it("deletes the whole guide group as one element", async () => {
+    const group = {
+      type: "group",
+      contents: { toArray: () => [shape(GUIDE_COLOR), shape(GUIDE_COLOR)] },
+    };
+    const { deleted } = runWith([group, { type: "text" }]);
+
+    expect((await removeGuides()).removed).toBe(1);
+    expect(deleted).toEqual([group]);
   });
 
   it("persists the deletion", async () => {

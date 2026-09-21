@@ -56,7 +56,8 @@ smaller page (93%, 82%, 74% for 8, 9 and 10). Splitting still emits 1080 px
 slides, upscaled from the smaller page.
 
 The page comes with guides drawn on it: thick lines on the slide edges, thin
-pairs marking a 6% margin to keep faces and words out of. **Draw guides on this
+pairs marking a 6% margin to keep faces and words out of. They go in as one
+group, so they are a single thing to select and delete by hand. **Draw guides on this
 page** adds them to a page you already have, and redraws them if you change the
 slide count.
 
