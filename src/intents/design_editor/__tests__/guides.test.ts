@@ -92,43 +92,77 @@ describe("guideLines", () => {
 });
 
 describe("buildGuideGroup", () => {
-  const group = buildGuideGroup(3, PAGE) as {
+  type Built = {
     type: string;
     top: number;
     left: number;
     width: number;
     height: number;
-    children: { type: string; top: number; height: number }[];
+    children: {
+      type: string;
+      top: number;
+      left: number;
+      width: number;
+      height: number;
+    }[];
   };
 
-  it("returns one group covering the page", () => {
-    expect(group).toMatchObject({
-      type: "group",
-      top: 0,
-      left: 0,
-      width: PAGE.width,
-      height: PAGE.height,
-    });
+  const built = (count: number, page = PAGE) =>
+    buildGuideGroup(count, page) as unknown as Built;
+
+  it("returns one group holding every guide", () => {
+    const group = built(3);
+
+    expect(group.type).toBe("group");
+    expect(group.children).toHaveLength(guideLines(3, PAGE).length);
   });
 
-  it("holds one full-height shape per guide", () => {
-    expect(group.children).toHaveLength(guideLines(3, PAGE).length);
+  // Canva rejects a group whose placement aspect differs from its content's.
+  it("sizes the group to exactly its children's bounding box", () => {
+    for (let count = 2; count <= 10; count++) {
+      const group = built(count);
+      const lefts = group.children.map((c) => c.left);
+      const rights = group.children.map((c) => c.left + c.width);
+      const tops = group.children.map((c) => c.top);
+      const bottoms = group.children.map((c) => c.top + c.height);
 
-    for (const child of group.children) {
-      expect(child).toMatchObject({ type: "shape", top: 0 });
-      expect(child.height).toBe(PAGE.height);
+      expect(Math.min(...lefts)).toBeCloseTo(0);
+      expect(Math.max(...rights)).toBeCloseTo(group.width);
+      expect(Math.min(...tops)).toBeCloseTo(0);
+      expect(Math.max(...bottoms)).toBeCloseTo(group.height);
     }
   });
 
+  it("is narrower than the page, because the outer guides sit inside it", () => {
+    const group = built(3);
+
+    expect(group.width).toBeLessThan(PAGE.width);
+    expect(group.left).toBeGreaterThan(0);
+  });
+
+  it("keeps the guides where the page wants them once the group is placed", () => {
+    const group = built(3);
+    const absolute = group.children.map((c) => group.left + c.left);
+
+    expect(absolute).toEqual(
+      guideLines(3, PAGE).map((line) => expect.closeTo(line.left, 5)),
+    );
+  });
+
+  it("spans the full page height", () => {
+    const group = built(4);
+
+    expect(group.height).toBe(PAGE.height);
+    expect(group.top).toBe(0);
+  });
+
   it("fills every child with the sentinel colour", () => {
-    expect(JSON.stringify(group)).toContain(GUIDE_COLOR);
+    expect(JSON.stringify(built(3))).toContain(GUIDE_COLOR);
   });
 
   it("always has enough children to be a group at all", () => {
     for (let count = 2; count <= 10; count++) {
-      const built = buildGuideGroup(count, PAGE) as { children: unknown[] };
-
-      expect(built.children.length).toBeGreaterThanOrEqual(2);
+      expect(built(count).children.length).toBeGreaterThanOrEqual(2);
     }
   });
 });

@@ -82,6 +82,9 @@ Three sources, picked in the panel:
   page id, so the page is matched by aspect ratio. A second page of exactly the
   same shape is the one case that can't be told apart, and the panel says so.
 - **Use selected image** — takes whatever image is selected on the canvas.
+- **Use a group on this page** — crops the page export to a group's box. An app
+  can't see the canvas selection (`SelectionScope` covers only image, video and
+  text content), so the group is chosen from a list; one group needs no choosing.
 
 The selected-image case is the cheapest: the artwork is already an asset in your
 account, so linked mode reuses its ref and never downloads, re-encodes, or

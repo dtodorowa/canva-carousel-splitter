@@ -81,27 +81,48 @@ export function guideLines(count: number, page: Size): GuideLine[] {
  * page, so the line positions carry over unchanged.
  */
 export function buildGuideGroup(count: number, page: Size): ElementAtPoint {
+  const lines = guideLines(count, page);
+  const box = guideBounds(lines, page);
+
   return {
     type: "group",
-    top: 0,
-    left: 0,
-    width: page.width,
-    height: page.height,
-    children: guideLines(count, page).map(({ left, width }) => ({
+    top: box.top,
+    left: box.left,
+    width: box.width,
+    height: box.height,
+    children: lines.map(({ left, width }) => ({
       type: "shape",
       paths: [
         {
-          d: `M 0 0 H ${width} V ${page.height} H 0 L 0 0`,
+          d: `M 0 0 H ${width} V ${box.height} H 0 L 0 0`,
           fill: { dropTarget: false, color: GUIDE_COLOR },
         },
       ],
-      viewBox: { top: 0, left: 0, width, height: page.height },
+      viewBox: { top: 0, left: 0, width, height: box.height },
       top: 0,
-      left,
+      // Children are positioned relative to the group.
+      left: left - box.left,
       width,
-      height: page.height,
+      height: box.height,
     })),
   };
+}
+
+/**
+ * The box the guides actually occupy.
+ *
+ * Canva rejects a group whose placement aspect ratio differs from that of its
+ * content, so the group has to be the children's bounding box rather than the
+ * whole page — the outermost guides sit a margin in from the page edges.
+ */
+export function guideBounds(
+  lines: readonly GuideLine[],
+  page: Size,
+): { left: number; top: number; width: number; height: number } {
+  const left = Math.min(...lines.map((line) => line.left));
+  const right = Math.max(...lines.map((line) => line.left + line.width));
+
+  return { left, top: 0, width: right - left, height: page.height };
 }
 
 /**

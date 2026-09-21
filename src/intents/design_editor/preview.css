@@ -4,8 +4,16 @@
   overflow: hidden;
   border-radius: var(--ui-kit-border-radius-large, 8px);
   background-color: var(--ui-kit-color-neutral-low);
-  background-size: cover;
-  background-position: center;
+}
+
+.previewCrop {
+  position: absolute;
+  overflow: hidden;
+}
+
+.previewImage {
+  position: absolute;
+  background-size: 100% 100%;
   background-repeat: no-repeat;
 }
 

@@ -22,6 +22,8 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useIntl } from "react-intl";
 import * as styles from "styles/components.css";
+import type { PageGroup } from "./groups";
+import { readGroups } from "./groups";
 import { buildGuideGroup, removeGuides } from "./guides";
 import { Preview } from "./preview";
 import type { SlideFormat } from "./slicer";
@@ -41,8 +43,10 @@ import type { CarouselSource, SourceKind } from "./sources";
 import {
   ExportAbortedError,
   NoSelectionError,
+  artworkSize,
   sourceFromDesign,
   sourceFromFile,
+  sourceFromGroup,
   sourceFromSelection,
 } from "./sources";
 import type { SplitMode } from "./split";
@@ -77,6 +81,9 @@ export const App = () => {
   const [addingGuides, setAddingGuides] = useState(false);
   const [currentPage, setCurrentPage] = useState<
     { width: number; height: number } | undefined
+  >();
+  const [groupChoice, setGroupChoice] = useState<
+    { groups: PageGroup[]; page: { width: number; height: number } } | undefined
   >();
 
   const format = useMemo<SlideFormat>(
@@ -149,7 +156,7 @@ export const App = () => {
       try {
         const next = await load();
         setSource(next);
-        setCount(suggestSlideCount(next, format));
+        setCount(suggestSlideCount(artworkSize(next), format));
       } catch (error) {
         setStatus({ kind: "error", message: describeError(error) });
       } finally {
@@ -169,6 +176,57 @@ export const App = () => {
       }),
     [adopt],
   );
+
+  const useGroup = useCallback(
+    (group: PageGroup, page: { width: number; height: number }) => {
+      setGroupChoice(undefined);
+
+      return adopt("group", async () => {
+        await removeGuides();
+
+        return sourceFromGroup(group, page);
+      });
+    },
+    [adopt],
+  );
+
+  /**
+   * An app can't see the canvas selection, so the group is chosen from a list.
+   * One group on the page needs no choosing.
+   */
+  const pickGroup = useCallback(async () => {
+    setLoadingSource("group");
+    setStatus({ kind: "idle" });
+
+    try {
+      const { groups, page } = await readGroups();
+
+      if (!page || groups.length === 0) {
+        setStatus({
+          kind: "error",
+          message: intl.formatMessage({
+            defaultMessage:
+              "No groups on this page. Group the artwork in Canva, then try again.",
+            description: "Shown when the page has no groups to offer",
+          }),
+        });
+
+        return;
+      }
+
+      if (groups.length === 1 && groups[0]) {
+        await useGroup(groups[0], page);
+
+        return;
+      }
+
+      setGroupChoice({ groups, page });
+    } catch (error) {
+      setStatus({ kind: "error", message: describeError(error) });
+    } finally {
+      setLoadingSource(undefined);
+    }
+  }, [intl, describeError, useGroup]);
 
   const addGuides = useCallback(async () => {
     if (!currentPage) {
@@ -242,7 +300,7 @@ export const App = () => {
   }, [plan, count, intl, describeError]);
 
   const waste = useMemo(
-    () => (source ? cropWaste(source, count, format) : undefined),
+    () => (source ? cropWaste(artworkSize(source), count, format) : undefined),
     [source, count, format],
   );
 
@@ -505,6 +563,19 @@ export const App = () => {
               <Button
                 variant="secondary"
                 stretch
+                disabled={picking || !canExport}
+                loading={loadingSource === "group"}
+                onClick={() => void pickGroup()}
+              >
+                {intl.formatMessage({
+                  defaultMessage: "Use a group on this page",
+                  description:
+                    "Button that uses a grouped set of layers as the source",
+                })}
+              </Button>
+              <Button
+                variant="secondary"
+                stretch
                 disabled={picking}
                 loading={loadingSource === "selection"}
                 onClick={() => void adopt("selection", sourceFromSelection)}
@@ -530,6 +601,48 @@ export const App = () => {
               { width: status.width, height: status.height },
             )}
           </Alert>
+        )}
+
+        {groupChoice && (
+          <Rows spacing="1u">
+            <Text size="small" tone="tertiary">
+              {intl.formatMessage({
+                defaultMessage:
+                  "This page has more than one group. Which is the carousel?",
+                description: "Heading above the group picker",
+              })}
+            </Text>
+            {groupChoice.groups.map((group) => (
+              <Button
+                key={group.index}
+                variant="secondary"
+                stretch
+                onClick={() => void useGroup(group, groupChoice.page)}
+              >
+                {intl.formatMessage(
+                  {
+                    defaultMessage: "Group {number} — {width} × {height}",
+                    description: "One option in the group picker",
+                  },
+                  {
+                    number: group.index + 1,
+                    width: Math.round(group.region.width),
+                    height: Math.round(group.region.height),
+                  },
+                )}
+              </Button>
+            ))}
+            <Button
+              variant="tertiary"
+              stretch
+              onClick={() => setGroupChoice(undefined)}
+            >
+              {intl.formatMessage({
+                defaultMessage: "Cancel",
+                description: "Dismisses the group picker",
+              })}
+            </Button>
+          </Rows>
         )}
 
         {status.kind === "guidesAdded" && (
@@ -569,7 +682,13 @@ export const App = () => {
 
         {source && (
           <Rows spacing="2u">
-            <Preview url={source.previewUrl} count={count} format={format} />
+            <Preview
+              url={source.previewUrl}
+              image={{ width: source.width, height: source.height }}
+              region={source.region}
+              count={count}
+              format={format}
+            />
 
             {source.pageCount != null && source.pageCount > 1 && (
               <Alert tone={source.pageAmbiguous ? "warn" : "info"}>
@@ -756,10 +875,15 @@ function sourceLabel(
         defaultMessage: "Selected image",
         description: "Name for artwork taken from the canvas selection",
       })
-    : intl.formatMessage({
-        defaultMessage: "Current design",
-        description: "Name for artwork taken from the open design",
-      });
+    : source.kind === "group"
+      ? intl.formatMessage({
+          defaultMessage: "Group on this page",
+          description: "Name for artwork taken from a group",
+        })
+      : intl.formatMessage({
+          defaultMessage: "Current design",
+          description: "Name for artwork taken from the open design",
+        });
 }
 
 function formatLabel(

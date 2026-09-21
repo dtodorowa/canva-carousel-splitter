@@ -1,9 +1,11 @@
 import type { ImageRef } from "@canva/asset";
 import { getTemporaryUrl } from "@canva/asset";
 import { getCurrentPageContext, requestExport, selection } from "@canva/design";
+import type { PageGroup, Region } from "./groups";
+import { regionInImage } from "./groups";
 import { loadImage, loadImageFromUrl } from "./slicer";
 
-export type SourceKind = "upload" | "design" | "selection";
+export type SourceKind = "upload" | "design" | "selection" | "group";
 
 /**
  * Where the carousel artwork comes from.
@@ -16,6 +18,7 @@ export type CarouselSource = {
   kind: SourceKind;
   /** Natural title, e.g. a filename. Empty when the UI should name it. */
   label: string;
+  /** Size of the whole image. The artwork may be only `region` of it. */
   width: number;
   height: number;
   /** Displayable in an `<img>`. Display never needs CORS; reading pixels does. */
@@ -29,6 +32,11 @@ export type CarouselSource = {
   pageIndex?: number;
   /** True when several pages were the same shape and the match was a guess. */
   pageAmbiguous?: boolean;
+  /**
+   * Part of `previewUrl` that is the artwork, in that image's pixels. Absent
+   * means all of it.
+   */
+  region?: Region;
   /** Decoded pixels, for slicing. Rejects when the URL is not CORS-readable. */
   loadPixels: () => Promise<HTMLImageElement>;
 };
@@ -219,4 +227,33 @@ async function measure(
   const image = await loadImageFromUrl(url, { crossOrigin: false });
 
   return { width: image.naturalWidth, height: image.naturalHeight };
+}
+
+/**
+ * A group on the current page, cropped out of the page export.
+ *
+ * The group's box is in page coordinates and the export comes back at its own
+ * resolution, so the box is rescaled into image pixels before use.
+ */
+export async function sourceFromGroup(
+  group: PageGroup,
+  page: { width: number; height: number },
+): Promise<CarouselSource> {
+  const source = await sourceFromDesign();
+  const region = regionInImage(group.region, page, {
+    width: source.width,
+    height: source.height,
+  });
+
+  return { ...source, kind: "group", label: "", region };
+}
+
+/** The artwork itself: the region when there is one, else the whole image. */
+export function artworkSize(source: CarouselSource): {
+  width: number;
+  height: number;
+} {
+  return source.region
+    ? { width: source.region.width, height: source.region.height }
+    : { width: source.width, height: source.height };
 }

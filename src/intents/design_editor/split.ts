@@ -28,7 +28,13 @@ export type SplitRequest = {
   onProgress?: (done: number, total: number) => void;
 };
 
-type PlacedAsset = { ref: ImageRef; width: number; height: number };
+type PlacedAsset = {
+  ref: ImageRef;
+  /** Full size of the uploaded asset, which the region is expressed against. */
+  width: number;
+  height: number;
+  region?: { left: number; top: number; width: number; height: number };
+};
 
 export async function addSlidesToDesign(request: SplitRequest): Promise<void> {
   if (request.mode === "overflow") {
@@ -55,7 +61,22 @@ async function addLinked({
 }: SplitRequest): Promise<void> {
   const asset = await resolveLinkedAsset(source, count, format, name);
   const target = compositeSize(count, format);
-  const fit = fitCover(asset, target);
+  // Cover-fit the region, then express that as a placement of the whole asset,
+  // so Canva's own scaling does the crop as well as the fit.
+  const crop = asset.region ?? {
+    left: 0,
+    top: 0,
+    width: asset.width,
+    height: asset.height,
+  };
+  const fit = fitCover(crop, target);
+  const scale = fit.drawWidth / crop.width;
+  const placed = {
+    width: asset.width * scale,
+    height: asset.height * scale,
+    left: fit.offsetX - crop.left * scale,
+    top: fit.offsetY - crop.top * scale,
+  };
 
   for (let i = 0; i < count; i++) {
     await addPage({
@@ -65,12 +86,12 @@ async function addLinked({
           type: "image",
           ref: asset.ref,
           altText: { text: altTextFor(i, count), decorative: false },
-          top: fit.offsetY,
+          top: placed.top,
           // Slide i's window onto the artwork; the rest hangs off-page and
           // Canva clips it at the page boundary.
-          left: fit.offsetX - i * format.width,
-          width: fit.drawWidth,
-          height: fit.drawHeight,
+          left: placed.left - i * format.width,
+          width: placed.width,
+          height: placed.height,
         },
       ],
     });
@@ -90,7 +111,12 @@ async function resolveLinkedAsset(
 ): Promise<PlacedAsset> {
   // Already an asset in the user's account. Nothing to transfer.
   if (source.ref) {
-    return { ref: source.ref, width: source.width, height: source.height };
+    return {
+      ref: source.ref,
+      width: source.width,
+      height: source.height,
+      region: source.region,
+    };
   }
 
   // A URL Canva's own servers can fetch, so the bytes never enter the browser.
@@ -106,12 +132,23 @@ async function resolveLinkedAsset(
       aiDisclosure: "none",
     });
 
-    return { ref, width: source.width, height: source.height };
+    return {
+      ref,
+      width: source.width,
+      height: source.height,
+      region: source.region,
+    };
   }
 
   // A local file. Flatten it to the carousel's exact size before uploading,
   // which also keeps it inside the 10MB data URL cap.
-  const composite = renderComposite(await source.loadPixels(), count, format);
+  // Flattening already applies the crop, so the upload needs no region.
+  const composite = renderComposite(
+    await source.loadPixels(),
+    count,
+    format,
+    source.region,
+  );
   const encoded = encodeCanvas(composite);
   const { ref } = await upload({
     type: "image",
@@ -136,7 +173,12 @@ async function addSliced({
   altTextFor,
   onProgress,
 }: SplitRequest): Promise<void> {
-  const composite = renderComposite(await source.loadPixels(), count, format);
+  const composite = renderComposite(
+    await source.loadPixels(),
+    count,
+    format,
+    source.region,
+  );
 
   for (let i = 0; i < count; i++) {
     const encoded = encodeCanvas(extractSlide(composite, i, format));

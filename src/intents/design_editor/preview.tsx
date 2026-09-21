@@ -1,8 +1,14 @@
-import type { SlideFormat } from "./slicer";
+import type { Region } from "./groups";
+import type { SlideFormat, Size } from "./slicer";
+import { compositeSize, fitCover } from "./slicer";
 import * as styles from "./preview.css";
 
 type PreviewProps = {
   url: string;
+  /** Size of the whole image at `url`. */
+  image: Size;
+  /** Part of it that is the artwork. Absent means all of it. */
+  region?: Region;
   count: number;
   format: SlideFormat;
 };
@@ -10,28 +16,56 @@ type PreviewProps = {
 /**
  * The artwork as it will be cut, with the seams drawn on.
  *
- * `background-size: cover` on a box of the carousel's aspect ratio performs
- * exactly the fit `fitCover` computes, so this stays truthful without reading a
- * single pixel — which matters because an exported design may not be
- * CORS-readable. It is a backdrop rather than an image element because the
- * artwork here is decorative; the real content is the seam positions.
+ * Laid out in percentages rather than drawn, so it never reads a pixel — an
+ * exported design may not be CORS-readable, and a region has to be croppable
+ * either way. Two nested boxes: the outer one is the cover fit of the region
+ * into the carousel, the inner one scales the whole image so that the region
+ * fills it.
  */
-export const Preview = ({ url, count, format }: PreviewProps) => {
+export const Preview = ({
+  url,
+  image,
+  region,
+  count,
+  format,
+}: PreviewProps) => {
+  const target = compositeSize(count, format);
+  const crop = region ?? { left: 0, top: 0, ...image };
+  const fit = fitCover(crop, target);
+  const percent = (value: number) => `${value * 100}%`;
+
   const seams = Array.from({ length: count - 1 }, (_, i) => (i + 1) / count);
 
   return (
     <div
       className={styles.previewFrame}
-      style={{
-        aspectRatio: `${format.width * count} / ${format.height}`,
-        backgroundImage: `url(${JSON.stringify(url)})`,
-      }}
+      style={{ aspectRatio: `${target.width} / ${target.height}` }}
     >
+      <div
+        className={styles.previewCrop}
+        style={{
+          left: percent(fit.offsetX / target.width),
+          top: percent(fit.offsetY / target.height),
+          width: percent(fit.drawWidth / target.width),
+          height: percent(fit.drawHeight / target.height),
+        }}
+      >
+        <div
+          className={styles.previewImage}
+          style={{
+            backgroundImage: `url(${JSON.stringify(url)})`,
+            left: percent(-crop.left / crop.width),
+            top: percent(-crop.top / crop.height),
+            width: percent(image.width / crop.width),
+            height: percent(image.height / crop.height),
+          }}
+        />
+      </div>
       {seams.map((fraction) => (
         <span
           key={fraction}
           className={styles.previewSeam}
-          style={{ left: `${fraction * 100}%` }}
+          style={{ left: percent(fraction) }}
         />
       ))}
     </div>

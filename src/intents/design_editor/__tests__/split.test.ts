@@ -198,6 +198,107 @@ describe("addSlidesToDesign", () => {
     });
   });
 
+  describe("a cropped source (a group on the page)", () => {
+    // The page exported at 2x, with the artwork occupying part of it.
+    const IMAGE = { width: 6480, height: 2700 };
+    const cropped = (region: {
+      left: number;
+      top: number;
+      width: number;
+      height: number;
+    }) =>
+      fileSource({
+        kind: "group",
+        ref: "page-export" as ImageRef,
+        previewUrl: "https://export.canva.example/design.png",
+        ...IMAGE,
+        region,
+      });
+
+    it("shifts the placement so the region starts at the first slide", async () => {
+      const source = cropped({
+        left: 1000,
+        top: 500,
+        width: WIDE.width,
+        height: WIDE.height,
+      });
+
+      await addSlidesToDesign(request("overflow", source));
+
+      // Region is already carousel-sized, so it is placed 1:1 and only moved.
+      expect(elements().map((e) => e?.left)).toEqual([
+        -1000,
+        -1000 - PORTRAIT.width,
+        -1000 - PORTRAIT.width * 2,
+      ]);
+      expect(elements()[0]?.top).toBe(-500);
+    });
+
+    it("places the whole image, not just the region", async () => {
+      const source = cropped({
+        left: 1000,
+        top: 500,
+        width: WIDE.width,
+        height: WIDE.height,
+      });
+
+      await addSlidesToDesign(request("overflow", source));
+
+      expect(elements()[0]).toMatchObject({
+        width: IMAGE.width,
+        height: IMAGE.height,
+      });
+    });
+
+    it("scales the image up when the region is smaller than the carousel", async () => {
+      const source = cropped({
+        left: 0,
+        top: 0,
+        width: WIDE.width / 2,
+        height: WIDE.height / 2,
+      });
+
+      await addSlidesToDesign(request("overflow", source));
+
+      // Region is half the carousel, so everything is drawn at 2x.
+      expect(elements()[0]).toMatchObject({
+        width: IMAGE.width * 2,
+        height: IMAGE.height * 2,
+        left: 0,
+        top: 0,
+      });
+    });
+
+    it("behaves exactly as an uncropped source when the region is the whole image", async () => {
+      const whole = cropped({ left: 0, top: 0, ...IMAGE });
+
+      await addSlidesToDesign(request("overflow", whole));
+      const withRegion = elements().map((e) => e?.left);
+
+      jest.clearAllMocks();
+      mockAddPage.mockResolvedValue({} as Awaited<ReturnType<typeof addPage>>);
+
+      const { region: _omitted, ...without } = whole;
+      await addSlidesToDesign(request("overflow", without));
+
+      expect(elements().map((e) => e?.left)).toEqual(withRegion);
+    });
+
+    it("hands the region to the compositor when slicing", async () => {
+      const region = { left: 10, top: 20, width: 300, height: 400 };
+      const source = cropped(region);
+
+      await addSlidesToDesign(request("slice", source));
+
+      expect(mockRenderComposite).toHaveBeenCalledWith(
+        expect.anything(),
+        COUNT,
+        PORTRAIT,
+        region,
+      );
+    });
+  });
+
   it("sets each page to the chosen slide dimensions", async () => {
     await addSlidesToDesign(request("slice"));
 

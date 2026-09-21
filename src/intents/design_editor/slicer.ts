@@ -172,6 +172,8 @@ export function renderComposite(
   source: CanvasImageSource & Size,
   count: number,
   format: SlideFormat,
+  /** Part of the source to use. Defaults to all of it. */
+  region?: { left: number; top: number; width: number; height: number },
 ): HTMLCanvasElement {
   const target = compositeSize(count, format);
   const canvas = createCanvas(target.width, target.height);
@@ -181,11 +183,22 @@ export function renderComposite(
     throw new Error("Could not get a 2D canvas context");
   }
 
-  const fit = fitCover(source, target);
+  const crop = region ?? {
+    left: 0,
+    top: 0,
+    width: source.width,
+    height: source.height,
+  };
+  const fit = fitCover(crop, target);
+
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = "high";
   ctx.drawImage(
     source,
+    crop.left,
+    crop.top,
+    crop.width,
+    crop.height,
     fit.offsetX,
     fit.offsetY,
     fit.drawWidth,
