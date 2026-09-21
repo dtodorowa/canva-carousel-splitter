@@ -107,6 +107,43 @@ export function cropWaste(source: Size, count: number, format: SlideFormat) {
   return { fraction: 1 - visible / drawn, target };
 }
 
+/** Canva rejects pages outside these bounds. */
+export const CANVA_MAX_PAGE_SIDE = 8000;
+export const CANVA_MAX_PAGE_AREA = 25_000_000;
+
+export type CarouselPagePlan = {
+  width: number;
+  height: number;
+  /** 1 when the carousel fits at full slide resolution, less when scaled down. */
+  scale: number;
+};
+
+/**
+ * The blank page to draw a whole carousel on.
+ *
+ * Past seven 1080px slides the run is wider than Canva allows a page to be, so
+ * rather than refuse, scale the page down and let the artwork be drawn smaller.
+ * Slicing upscales it back, which costs sharpness but keeps the workflow.
+ */
+export function planCarouselPage(
+  count: number,
+  format: SlideFormat,
+): CarouselPagePlan {
+  const full = compositeSize(count, format);
+  const scale = Math.min(
+    1,
+    CANVA_MAX_PAGE_SIDE / full.width,
+    CANVA_MAX_PAGE_SIDE / full.height,
+    Math.sqrt(CANVA_MAX_PAGE_AREA / (full.width * full.height)),
+  );
+
+  return {
+    width: Math.floor(full.width * scale),
+    height: Math.floor(full.height * scale),
+    scale,
+  };
+}
+
 export function exceedsCanvasLimit(
   count: number,
   format: SlideFormat,

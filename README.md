@@ -37,13 +37,33 @@ will say so if it can't.
 To get hot reload, set `CANVA_APP_ORIGIN` in `.env` from **Developer Portal →
 your app → Settings → Security**, and `CANVA_HMR_ENABLED=TRUE`.
 
+## Starting from scratch
+
+Pick a slide count and the panel shows the artwork size it needs, then adds a
+blank page at exactly that size to draw on:
+
+| Slides | 4:5         | 1:1         |
+| ------ | ----------- | ----------- |
+| 2      | 2160 × 1350 | 2160 × 1080 |
+| 3      | 3240 × 1350 | 3240 × 1080 |
+| 4      | 4320 × 1350 | 4320 × 1080 |
+| 5      | 5400 × 1350 | 5400 × 1080 |
+| 6      | 6480 × 1350 | 6480 × 1080 |
+| 7      | 7560 × 1350 | 7560 × 1080 |
+
+Canva caps a page at 8000 px per side, so 8 or more slides get a proportionally
+smaller page (93%, 82%, 74% for 8, 9 and 10). Splitting still emits 1080 px
+slides, upscaled from the smaller page.
+
+Draw the carousel on that page, then choose **Use current design**.
+
 ## Where the artwork comes from
 
 Three sources, picked in the panel:
 
 - **Upload** a file — made anywhere: Figma, Procreate, a screenshot.
-- **Use current design** — exports the open design as PNG and splits the first
-  page. Design the wide version in Canva, then cut it up in place.
+- **Use current design** — exports the open design as PNG and splits its widest
+  page. Widest rather than first, because a page this app adds lands at the end.
 - **Use selected image** — takes whatever image is selected on the canvas.
 
 The selected-image case is the cheapest: the artwork is already an asset in your
@@ -79,13 +99,13 @@ browser isn't allowed to read (see below).
 
 ## Layout
 
-| File          | What's in it                                             |
-| ------------- | -------------------------------------------------------- |
-| `slicer.ts`   | Fit geometry and canvas work. Geometry is DOM-free.      |
-| `sources.ts`  | Upload, design export, and canvas selection as one type. |
-| `split.ts`    | Upload and page creation for both modes.                 |
-| `preview.tsx` | Seam overlay on a CSS cover fit — reads no pixels.       |
-| `app.tsx`     | The panel UI.                                            |
+| File          | What's in it                                                |
+| ------------- | ----------------------------------------------------------- |
+| `slicer.ts`   | Fit geometry, page sizing, and canvas work. DOM-free maths. |
+| `sources.ts`  | Upload, design export, and canvas selection as one type.    |
+| `split.ts`    | Upload and page creation for both modes.                    |
+| `preview.tsx` | Seam overlay on a CSS cover fit — reads no pixels.          |
+| `app.tsx`     | The panel UI.                                               |
 
 All under `src/intents/design_editor/`.
 

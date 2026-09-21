@@ -1,13 +1,17 @@
 import {
   MAX_SLIDES,
   MIN_SLIDES,
+  CANVA_MAX_PAGE_AREA,
+  CANVA_MAX_PAGE_SIDE,
   PORTRAIT,
+  SLIDE_FORMATS,
   SQUARE,
   clampSlideCount,
   compositeSize,
   cropWaste,
   exceedsCanvasLimit,
   fitCover,
+  planCarouselPage,
   suggestSlideCount,
 } from "../slicer";
 
@@ -140,5 +144,56 @@ describe("exceedsCanvasLimit", () => {
     const wide = { id: "wide", width: 8000, height: 1350 };
 
     expect(exceedsCanvasLimit(10, wide)).toBe(true);
+  });
+});
+
+describe("planCarouselPage", () => {
+  it("uses the full slide resolution while Canva allows it", () => {
+    expect(planCarouselPage(3, portrait)).toEqual({
+      width: 3240,
+      height: 1350,
+      scale: 1,
+    });
+    expect(planCarouselPage(4, portrait)).toMatchObject({ width: 4320 });
+    expect(planCarouselPage(6, portrait)).toMatchObject({ width: 6480 });
+  });
+
+  it("still fits seven 1080px slides, the widest run Canva will take", () => {
+    expect(planCarouselPage(7, portrait)).toEqual({
+      width: 7560,
+      height: 1350,
+      scale: 1,
+    });
+  });
+
+  it("scales down rather than refusing once the run is too wide", () => {
+    const plan = planCarouselPage(8, portrait);
+
+    expect(plan.scale).toBeLessThan(1);
+    expect(plan.width).toBe(CANVA_MAX_PAGE_SIDE);
+    expect(plan.height).toBe(1250);
+  });
+
+  it("never proposes a page Canva would reject", () => {
+    for (const format of SLIDE_FORMATS) {
+      for (let count = MIN_SLIDES; count <= MAX_SLIDES; count++) {
+        const plan = planCarouselPage(count, format);
+
+        expect(plan.width).toBeLessThanOrEqual(CANVA_MAX_PAGE_SIDE);
+        expect(plan.height).toBeLessThanOrEqual(CANVA_MAX_PAGE_SIDE);
+        expect(plan.width * plan.height).toBeLessThanOrEqual(
+          CANVA_MAX_PAGE_AREA,
+        );
+        expect(plan.width).toBeGreaterThanOrEqual(40);
+        expect(plan.height).toBeGreaterThanOrEqual(40);
+      }
+    }
+  });
+
+  it("keeps the carousel aspect ratio when it scales down", () => {
+    const plan = planCarouselPage(10, portrait);
+    const wanted = (10 * portrait.width) / portrait.height;
+
+    expect(plan.width / plan.height).toBeCloseTo(wanted, 1);
   });
 });

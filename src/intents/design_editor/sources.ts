@@ -25,6 +25,8 @@ export type CarouselSource = {
   mimeType?: "image/png" | "image/jpeg";
   /** Pages in the exported design, so the UI can say which one it took. */
   pageCount?: number;
+  /** Zero-based index of the page that was chosen. */
+  pageIndex?: number;
   /** Decoded pixels, for slicing. Rejects when the URL is not CORS-readable. */
   loadPixels: () => Promise<HTMLImageElement>;
 };
@@ -113,8 +115,9 @@ async function readOnce(event: SelectionLike): Promise<{ ref: ImageRef }> {
  * The open design, exported as a PNG.
  *
  * `zipped: "never"` gives one URL per page rather than a ZIP we would have to
- * unpack; we take the first page, which is the wide artwork in the workflow
- * this app is for.
+ * unpack. Of those we take the widest page: carousel artwork is by definition
+ * the long one, and a page added by this app lands at the end rather than the
+ * start, so "first" would be the wrong guess.
  */
 export async function sourceFromDesign(): Promise<CarouselSource> {
   const response = await requestExport({
@@ -125,20 +128,31 @@ export async function sourceFromDesign(): Promise<CarouselSource> {
     throw new ExportAbortedError("Export was cancelled.");
   }
 
-  const first = response.exportBlobs[0];
-
-  if (!first) {
+  if (response.exportBlobs.length === 0) {
     throw new Error("The export came back empty.");
   }
+
+  const pages = await Promise.all(
+    response.exportBlobs.map(async (blob) => ({
+      url: blob.url,
+      ...(await measure(blob.url)),
+    })),
+  );
+
+  const widest = pages.reduce((best, page) =>
+    page.width / page.height > best.width / best.height ? page : best,
+  );
 
   return {
     kind: "design",
     label: response.title ?? "",
-    ...(await measure(first.url)),
-    previewUrl: first.url,
+    width: widest.width,
+    height: widest.height,
+    previewUrl: widest.url,
     mimeType: "image/png",
-    pageCount: response.exportBlobs.length,
-    loadPixels: memo(() => loadImageFromUrl(first.url, { crossOrigin: true })),
+    pageCount: pages.length,
+    pageIndex: pages.indexOf(widest),
+    loadPixels: memo(() => loadImageFromUrl(widest.url, { crossOrigin: true })),
   };
 }
 

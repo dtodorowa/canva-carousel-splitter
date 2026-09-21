@@ -25,8 +25,10 @@ import {
   MIN_SLIDES,
   SLIDE_FORMATS,
   clampSlideCount,
+  compositeSize,
   cropWaste,
   exceedsCanvasLimit,
+  planCarouselPage,
   suggestSlideCount,
 } from "./slicer";
 import type { CarouselSource, SourceKind } from "./sources";
@@ -47,6 +49,7 @@ type Status =
   | { kind: "idle" }
   | { kind: "working"; done: number; total: number }
   | { kind: "done"; count: number }
+  | { kind: "canvasAdded"; width: number; height: number }
   | { kind: "error"; message: string };
 
 export const App = () => {
@@ -61,11 +64,15 @@ export const App = () => {
   const [count, setCount] = useState(3);
   const [mode, setMode] = useState<SplitMode>("slice");
   const [status, setStatus] = useState<Status>({ kind: "idle" });
+  const [addingCanvas, setAddingCanvas] = useState(false);
 
   const format = useMemo<SlideFormat>(
     () => SLIDE_FORMATS.find((f) => f.id === formatId) ?? DEFAULT_FORMAT,
     [formatId],
   );
+
+  const target = useMemo(() => compositeSize(count, format), [count, format]);
+  const plan = useMemo(() => planCarouselPage(count, format), [count, format]);
 
   const describeError = useCallback(
     (error: unknown): string => {
@@ -118,6 +125,34 @@ export const App = () => {
     setSource(undefined);
     setStatus({ kind: "idle" });
   }, []);
+
+  /** Add the blank wide page the whole carousel gets drawn on. */
+  const addCanvas = useCallback(async () => {
+    setAddingCanvas(true);
+    setStatus({ kind: "idle" });
+
+    try {
+      await addPage({
+        dimensions: { width: plan.width, height: plan.height },
+        title: intl.formatMessage(
+          {
+            defaultMessage: "Carousel — {count} slides",
+            description: "Title given to the blank carousel page",
+          },
+          { count },
+        ),
+      });
+      setStatus({
+        kind: "canvasAdded",
+        width: plan.width,
+        height: plan.height,
+      });
+    } catch (error) {
+      setStatus({ kind: "error", message: describeError(error) });
+    } finally {
+      setAddingCanvas(false);
+    }
+  }, [plan, count, intl, describeError]);
 
   const waste = useMemo(
     () => (source ? cropWaste(source, count, format) : undefined),
@@ -196,6 +231,58 @@ export const App = () => {
           </Alert>
         )}
 
+        <FormField
+          label={intl.formatMessage({
+            defaultMessage: "Slide size",
+            description: "Label for the slide dimensions picker",
+          })}
+          value={formatId}
+          control={(props) => (
+            <Select
+              {...props}
+              stretch
+              disabled={busy}
+              options={SLIDE_FORMATS.map((f) => ({
+                value: f.id,
+                label: formatLabel(f, intl),
+              }))}
+              onChange={(value) => setFormatId(value)}
+            />
+          )}
+        />
+
+        <FormField
+          label={intl.formatMessage(
+            {
+              defaultMessage: "Slides: {count}",
+              description: "Label for the slide count slider",
+            },
+            { count },
+          )}
+          value={count}
+          control={(props) => (
+            <Slider
+              {...props}
+              min={MIN_SLIDES}
+              max={MAX_SLIDES}
+              step={1}
+              disabled={busy}
+              onChange={(value) => setCount(clampSlideCount(value))}
+            />
+          )}
+        />
+
+        <Text size="small" tone="tertiary">
+          {intl.formatMessage(
+            {
+              defaultMessage:
+                "{count} slides side by side is {width} × {height} px.",
+              description: "The full size of the artwork for this carousel",
+            },
+            { count, width: target.width, height: target.height },
+          )}
+        </Text>
+
         {source ? (
           <FileInputItem
             label={sourceLabel(source, intl)}
@@ -203,47 +290,103 @@ export const App = () => {
             disabled={busy}
           />
         ) : (
-          <Rows spacing="1u">
-            <FileInput
-              accept={["image/png", "image/jpeg", "image/webp"]}
-              multiple={false}
-              stretchButton
-              disabled={picking}
-              onDropAcceptedFiles={(files) => {
-                const picked = files[0];
+          <Rows spacing="2u">
+            <Rows spacing="1u">
+              <Button
+                variant="primary"
+                stretch
+                loading={addingCanvas}
+                disabled={addingCanvas || !canAddPages}
+                onClick={addCanvas}
+              >
+                {intl.formatMessage(
+                  {
+                    defaultMessage: "Add a blank {width} × {height} page",
+                    description:
+                      "Button that adds a correctly sized page to draw on",
+                  },
+                  { width: plan.width, height: plan.height },
+                )}
+              </Button>
+              {plan.scale < 1 && (
+                <Text size="small" tone="tertiary">
+                  {intl.formatMessage(
+                    {
+                      defaultMessage:
+                        "Canva caps pages at 8000 px wide, so this one is {percent}% scale. Splitting still produces {width} px slides, scaled back up.",
+                      description:
+                        "Explains why the page is smaller than the full carousel",
+                    },
+                    {
+                      percent: Math.round(plan.scale * 100),
+                      width: format.width,
+                    },
+                  )}
+                </Text>
+              )}
+            </Rows>
 
-                if (picked) {
-                  void adopt("upload", () => sourceFromFile(picked));
-                }
-              }}
-            />
-            <Button
-              variant="secondary"
-              stretch
-              disabled={picking || !canExport}
-              loading={loadingSource === "design"}
-              onClick={() => void adopt("design", sourceFromDesign)}
-            >
-              {intl.formatMessage({
-                defaultMessage: "Use current design",
-                description:
-                  "Button that exports the open design as the source",
-              })}
-            </Button>
-            <Button
-              variant="secondary"
-              stretch
-              disabled={picking}
-              loading={loadingSource === "selection"}
-              onClick={() => void adopt("selection", sourceFromSelection)}
-            >
-              {intl.formatMessage({
-                defaultMessage: "Use selected image",
-                description:
-                  "Button that uses the image selected on the canvas as the source",
-              })}
-            </Button>
+            <Rows spacing="1u">
+              <Text size="small" tone="tertiary">
+                {intl.formatMessage({
+                  defaultMessage: "Or split artwork you already have:",
+                  description: "Heading above the artwork source options",
+                })}
+              </Text>
+              <FileInput
+                accept={["image/png", "image/jpeg", "image/webp"]}
+                multiple={false}
+                stretchButton
+                disabled={picking}
+                onDropAcceptedFiles={(files) => {
+                  const picked = files[0];
+
+                  if (picked) {
+                    void adopt("upload", () => sourceFromFile(picked));
+                  }
+                }}
+              />
+              <Button
+                variant="secondary"
+                stretch
+                disabled={picking || !canExport}
+                loading={loadingSource === "design"}
+                onClick={() => void adopt("design", sourceFromDesign)}
+              >
+                {intl.formatMessage({
+                  defaultMessage: "Use current design",
+                  description:
+                    "Button that exports the open design as the source",
+                })}
+              </Button>
+              <Button
+                variant="secondary"
+                stretch
+                disabled={picking}
+                loading={loadingSource === "selection"}
+                onClick={() => void adopt("selection", sourceFromSelection)}
+              >
+                {intl.formatMessage({
+                  defaultMessage: "Use selected image",
+                  description:
+                    "Button that uses the image selected on the canvas as the source",
+                })}
+              </Button>
+            </Rows>
           </Rows>
+        )}
+
+        {status.kind === "canvasAdded" && (
+          <Alert tone="positive">
+            {intl.formatMessage(
+              {
+                defaultMessage:
+                  "Added a {width} × {height} page at the end of your design. Draw the whole carousel there, then come back and choose Use current design.",
+                description: "Success message after adding the blank page",
+              },
+              { width: status.width, height: status.height },
+            )}
+          </Alert>
         )}
 
         {status.kind === "error" && !source && (
@@ -259,55 +402,17 @@ export const App = () => {
                 {intl.formatMessage(
                   {
                     defaultMessage:
-                      "Your design has {pages} pages. Only the first one is being split.",
+                      "Your design has {pages} pages. Splitting page {page}, the widest one.",
                     description:
                       "Shown when the exported design had more than one page",
                   },
-                  { pages: source.pageCount },
+                  {
+                    pages: source.pageCount,
+                    page: (source.pageIndex ?? 0) + 1,
+                  },
                 )}
               </Alert>
             )}
-
-            <FormField
-              label={intl.formatMessage({
-                defaultMessage: "Slide size",
-                description: "Label for the slide dimensions picker",
-              })}
-              value={formatId}
-              control={(props) => (
-                <Select
-                  {...props}
-                  stretch
-                  disabled={busy}
-                  options={SLIDE_FORMATS.map((f) => ({
-                    value: f.id,
-                    label: formatLabel(f, intl),
-                  }))}
-                  onChange={(value) => setFormatId(value)}
-                />
-              )}
-            />
-
-            <FormField
-              label={intl.formatMessage(
-                {
-                  defaultMessage: "Slides: {count}",
-                  description: "Label for the slide count slider",
-                },
-                { count },
-              )}
-              value={count}
-              control={(props) => (
-                <Slider
-                  {...props}
-                  min={MIN_SLIDES}
-                  max={MAX_SLIDES}
-                  step={1}
-                  disabled={busy}
-                  onChange={(value) => setCount(clampSlideCount(value))}
-                />
-              )}
-            />
 
             <FormField
               label={intl.formatMessage({
