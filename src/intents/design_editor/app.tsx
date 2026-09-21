@@ -13,10 +13,16 @@ import {
   Text,
   Title,
 } from "@canva/app-ui-kit";
-import { addPage, getCurrentPageContext, requestExport } from "@canva/design";
+import {
+  addElementAtPoint,
+  addPage,
+  getCurrentPageContext,
+  requestExport,
+} from "@canva/design";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useIntl } from "react-intl";
 import * as styles from "styles/components.css";
+import { buildGuideElements, removeGuides } from "./guides";
 import { Preview } from "./preview";
 import type { SlideFormat } from "./slicer";
 import {
@@ -50,6 +56,8 @@ type Status =
   | { kind: "working"; done: number; total: number }
   | { kind: "done"; count: number }
   | { kind: "canvasAdded"; width: number; height: number }
+  | { kind: "guidesAdded" }
+  | { kind: "guidesRemoved"; count: number }
   | { kind: "error"; message: string };
 
 export const App = () => {
@@ -57,6 +65,7 @@ export const App = () => {
   const isSupported = useFeatureSupport();
   const canAddPages = isSupported(addPage);
   const canExport = isSupported(requestExport);
+  const canAddElements = isSupported(addElementAtPoint);
 
   const [source, setSource] = useState<CarouselSource | undefined>();
   const [loadingSource, setLoadingSource] = useState<SourceKind | undefined>();
@@ -65,6 +74,7 @@ export const App = () => {
   const [mode, setMode] = useState<SplitMode>("slice");
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [addingCanvas, setAddingCanvas] = useState(false);
+  const [addingGuides, setAddingGuides] = useState(false);
   const [currentPage, setCurrentPage] = useState<
     { width: number; height: number } | undefined
   >();
@@ -149,6 +159,56 @@ export const App = () => {
     [format, describeError],
   );
 
+  /** Guides are real elements, so strip them before anything is exported. */
+  const useCurrentPage = useCallback(
+    () =>
+      adopt("design", async () => {
+        await removeGuides();
+
+        return sourceFromDesign();
+      }),
+    [adopt],
+  );
+
+  const addGuides = useCallback(async () => {
+    if (!currentPage) {
+      return;
+    }
+
+    setAddingGuides(true);
+    setStatus({ kind: "idle" });
+
+    try {
+      // Clear any existing set first, so changing the slide count redraws
+      // rather than stacking a second set of lines on the page.
+      await removeGuides();
+
+      for (const element of buildGuideElements(count, currentPage)) {
+        await addElementAtPoint(element);
+      }
+
+      setStatus({ kind: "guidesAdded" });
+    } catch (error) {
+      setStatus({ kind: "error", message: describeError(error) });
+    } finally {
+      setAddingGuides(false);
+    }
+  }, [currentPage, count, describeError]);
+
+  const dropGuides = useCallback(async () => {
+    setAddingGuides(true);
+    setStatus({ kind: "idle" });
+
+    try {
+      const removed = await removeGuides();
+      setStatus({ kind: "guidesRemoved", count: removed });
+    } catch (error) {
+      setStatus({ kind: "error", message: describeError(error) });
+    } finally {
+      setAddingGuides(false);
+    }
+  }, [describeError]);
+
   const clearSource = useCallback(() => {
     setSource(undefined);
     setStatus({ kind: "idle" });
@@ -162,6 +222,7 @@ export const App = () => {
     try {
       await addPage({
         dimensions: { width: plan.width, height: plan.height },
+        elements: buildGuideElements(count, plan),
         title: intl.formatMessage(
           {
             defaultMessage: "Carousel — {count} slides",
@@ -370,6 +431,46 @@ export const App = () => {
               )}
             </Rows>
 
+            {currentPage && canAddElements && (
+              <Rows spacing="1u">
+                <Button
+                  variant="secondary"
+                  stretch
+                  loading={addingGuides}
+                  disabled={addingGuides}
+                  onClick={() => void addGuides()}
+                >
+                  {intl.formatMessage(
+                    {
+                      defaultMessage: "Draw {count} slide guides on this page",
+                      description:
+                        "Button that draws slide boundary guides on the open page",
+                    },
+                    { count },
+                  )}
+                </Button>
+                <Button
+                  variant="tertiary"
+                  stretch
+                  disabled={addingGuides}
+                  onClick={() => void dropGuides()}
+                >
+                  {intl.formatMessage({
+                    defaultMessage: "Remove guides",
+                    description: "Button that deletes the guides again",
+                  })}
+                </Button>
+                <Text size="small" tone="tertiary">
+                  {intl.formatMessage({
+                    defaultMessage:
+                      "Guides are real shapes, so they would show up in your slides. Splitting deletes them first, automatically.",
+                    description:
+                      "Explains that guides are removed before split",
+                  })}
+                </Text>
+              </Rows>
+            )}
+
             <Rows spacing="1u">
               <Text size="small" tone="tertiary">
                 {intl.formatMessage({
@@ -395,7 +496,7 @@ export const App = () => {
                 stretch
                 disabled={picking || !canExport}
                 loading={loadingSource === "design"}
-                onClick={() => void adopt("design", sourceFromDesign)}
+                onClick={() => void useCurrentPage()}
               >
                 {intl.formatMessage({
                   defaultMessage: "Use current design",
@@ -425,11 +526,38 @@ export const App = () => {
             {intl.formatMessage(
               {
                 defaultMessage:
-                  "Added a {width} × {height} page at the end of your design. Draw the whole carousel there, then come back and choose Use current design.",
+                  "Added a {width} × {height} page with slide guides on it. Draw the whole carousel there, then come back and choose Use current page.",
                 description: "Success message after adding the blank page",
               },
               { width: status.width, height: status.height },
             )}
+          </Alert>
+        )}
+
+        {status.kind === "guidesAdded" && (
+          <Alert tone="positive">
+            {intl.formatMessage({
+              defaultMessage:
+                "Guides drawn. The thick lines are the slide edges; the thin pairs mark the margin to keep faces and words out of.",
+              description: "Success message after drawing guides",
+            })}
+          </Alert>
+        )}
+
+        {status.kind === "guidesRemoved" && (
+          <Alert tone="positive">
+            {status.count > 0
+              ? intl.formatMessage(
+                  {
+                    defaultMessage: "Removed {count} guides.",
+                    description: "Success message after removing guides",
+                  },
+                  { count: status.count },
+                )
+              : intl.formatMessage({
+                  defaultMessage: "There were no guides on this page.",
+                  description: "Shown when there was nothing to remove",
+                })}
           </Alert>
         )}
 

@@ -55,6 +55,17 @@ Canva caps a page at 8000 px per side, so 8 or more slides get a proportionally
 smaller page (93%, 82%, 74% for 8, 9 and 10). Splitting still emits 1080 px
 slides, upscaled from the smaller page.
 
+The page comes with guides drawn on it: thick lines on the slide edges, thin
+pairs marking a 6% margin to keep faces and words out of. **Draw guides on this
+page** adds them to a page you already have, and redraws them if you change the
+slide count.
+
+Canva's own guides would be the right tool — visible while designing, never
+exported — but the Apps SDK has no API for them. These are real shape elements,
+so splitting deletes them first, automatically. That ordering is the whole
+point: the failure mode is guides left on a page, never guides baked into a
+slide.
+
 Draw the carousel on that page, then choose **Use current page**.
 
 The panel reads the page you have open when it starts, so a 3240 × 1350 page
@@ -107,6 +118,7 @@ browser isn't allowed to read (see below).
 | File          | What's in it                                                |
 | ------------- | ----------------------------------------------------------- |
 | `slicer.ts`   | Fit geometry, page sizing, and canvas work. DOM-free maths. |
+| `guides.ts`   | Drawing and removing the slide guides.                      |
 | `sources.ts`  | Upload, design export, and canvas selection as one type.    |
 | `split.ts`    | Upload and page creation for both modes.                    |
 | `preview.tsx` | Seam overlay on a CSS cover fit — reads no pixels.          |
