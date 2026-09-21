@@ -55,15 +55,20 @@ Canva caps a page at 8000 px per side, so 8 or more slides get a proportionally
 smaller page (93%, 82%, 74% for 8, 9 and 10). Splitting still emits 1080 px
 slides, upscaled from the smaller page.
 
-Draw the carousel on that page, then choose **Use current design**.
+Draw the carousel on that page, then choose **Use current page**.
+
+The panel reads the page you have open when it starts, so a 3240 × 1350 page
+already says 3 slides before you touch anything.
 
 ## Where the artwork comes from
 
 Three sources, picked in the panel:
 
 - **Upload** a file — made anywhere: Figma, Procreate, a screenshot.
-- **Use current design** — exports the open design as PNG and splits its widest
-  page. Widest rather than first, because a page this app adds lands at the end.
+- **Use current page** — exports the design as PNG and splits the page you have
+  open. `requestExport` only exports whole designs and an `ExportBlob` carries no
+  page id, so the page is matched by aspect ratio. A second page of exactly the
+  same shape is the one case that can't be told apart, and the panel says so.
 - **Use selected image** — takes whatever image is selected on the canvas.
 
 The selected-image case is the cheapest: the artwork is already an asset in your

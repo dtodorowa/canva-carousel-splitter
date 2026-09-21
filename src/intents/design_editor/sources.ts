@@ -1,6 +1,6 @@
 import type { ImageRef } from "@canva/asset";
 import { getTemporaryUrl } from "@canva/asset";
-import { requestExport, selection } from "@canva/design";
+import { getCurrentPageContext, requestExport, selection } from "@canva/design";
 import { loadImage, loadImageFromUrl } from "./slicer";
 
 export type SourceKind = "upload" | "design" | "selection";
@@ -27,6 +27,8 @@ export type CarouselSource = {
   pageCount?: number;
   /** Zero-based index of the page that was chosen. */
   pageIndex?: number;
+  /** True when several pages were the same shape and the match was a guess. */
+  pageAmbiguous?: boolean;
   /** Decoded pixels, for slicing. Rejects when the URL is not CORS-readable. */
   loadPixels: () => Promise<HTMLImageElement>;
 };
@@ -112,47 +114,98 @@ async function readOnce(event: SelectionLike): Promise<{ ref: ImageRef }> {
 }
 
 /**
- * The open design, exported as a PNG.
+ * The page the user is looking at, exported as a PNG.
  *
- * `zipped: "never"` gives one URL per page rather than a ZIP we would have to
- * unpack. Of those we take the widest page: carousel artwork is by definition
- * the long one, and a page added by this app lands at the end rather than the
- * start, so "first" would be the wrong guess.
+ * `requestExport` only exports whole designs, and an `ExportBlob` carries a URL
+ * and nothing else — no page id to match on. The current page's aspect ratio is
+ * the only link back, so that is what we match. It separates a carousel page
+ * from ordinary slides cleanly; it can only be fooled by a second page of
+ * exactly the same shape, which the caller is told about.
  */
 export async function sourceFromDesign(): Promise<CarouselSource> {
-  const response = await requestExport({
-    acceptedFileTypes: [{ type: "png", zipped: "never" }],
-  });
+  const [context, response] = await Promise.all([
+    getCurrentPageContext(),
+    requestExport({ acceptedFileTypes: [{ type: "png", zipped: "never" }] }),
+  ]);
 
   if (response.status === "aborted") {
     throw new ExportAbortedError("Export was cancelled.");
   }
 
-  if (response.exportBlobs.length === 0) {
+  const blobs = response.exportBlobs;
+
+  if (blobs.length === 0) {
     throw new Error("The export came back empty.");
   }
 
   const pages = await Promise.all(
-    response.exportBlobs.map(async (blob) => ({
+    blobs.map(async (blob) => ({
       url: blob.url,
       ...(await measure(blob.url)),
     })),
   );
-
-  const widest = pages.reduce((best, page) =>
-    page.width / page.height > best.width / best.height ? page : best,
-  );
+  const chosen = pickCurrentPage(pages, context.dimensions);
 
   return {
     kind: "design",
     label: response.title ?? "",
-    width: widest.width,
-    height: widest.height,
-    previewUrl: widest.url,
+    width: chosen.page.width,
+    height: chosen.page.height,
+    previewUrl: chosen.page.url,
     mimeType: "image/png",
     pageCount: pages.length,
-    pageIndex: pages.indexOf(widest),
-    loadPixels: memo(() => loadImageFromUrl(widest.url, { crossOrigin: true })),
+    pageIndex: chosen.index,
+    pageAmbiguous: chosen.ambiguous,
+    loadPixels: memo(() =>
+      loadImageFromUrl(chosen.page.url, { crossOrigin: true }),
+    ),
+  };
+}
+
+type MeasuredPage = { url: string; width: number; height: number };
+
+/**
+ * Exports come back scaled, so compare shape rather than size. Without a
+ * current page to match (docs and whiteboards report no dimensions) the widest
+ * page is the best guess, because carousel artwork is the long one.
+ */
+export function pickCurrentPage(
+  pages: readonly MeasuredPage[],
+  current: { width: number; height: number } | undefined,
+): { page: MeasuredPage; index: number; ambiguous: boolean } {
+  const first = pages[0];
+
+  if (!first) {
+    throw new Error("The export came back empty.");
+  }
+
+  if (pages.length === 1) {
+    return { page: first, index: 0, ambiguous: false };
+  }
+
+  const ratios = pages.map((page) => page.width / page.height);
+
+  if (!current) {
+    const widest = ratios.indexOf(Math.max(...ratios));
+
+    return {
+      page: pages[widest] as MeasuredPage,
+      index: widest,
+      ambiguous: true,
+    };
+  }
+
+  const wanted = current.width / current.height;
+  const distances = ratios.map((ratio) => Math.abs(ratio - wanted));
+  const closest = Math.min(...distances);
+  const best = distances.indexOf(closest);
+
+  return {
+    page: pages[best] as MeasuredPage,
+    index: best,
+    // Another page of the same shape means the aspect ratio could not tell
+    // them apart.
+    ambiguous: distances.filter((d) => Math.abs(d - closest) < 1e-6).length > 1,
   };
 }
 

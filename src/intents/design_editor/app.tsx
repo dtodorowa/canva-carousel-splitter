@@ -13,8 +13,8 @@ import {
   Text,
   Title,
 } from "@canva/app-ui-kit";
-import { addPage, requestExport } from "@canva/design";
-import { useCallback, useMemo, useState } from "react";
+import { addPage, getCurrentPageContext, requestExport } from "@canva/design";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useIntl } from "react-intl";
 import * as styles from "styles/components.css";
 import { Preview } from "./preview";
@@ -65,11 +65,39 @@ export const App = () => {
   const [mode, setMode] = useState<SplitMode>("slice");
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [addingCanvas, setAddingCanvas] = useState(false);
+  const [currentPage, setCurrentPage] = useState<
+    { width: number; height: number } | undefined
+  >();
 
   const format = useMemo<SlideFormat>(
     () => SLIDE_FORMATS.find((f) => f.id === formatId) ?? DEFAULT_FORMAT,
     [formatId],
   );
+
+  // Open on a wide page and the slide count should already be right, so read
+  // the page once on mount. Later changes are the user's, so this never reruns.
+  useEffect(() => {
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        const context = await getCurrentPageContext();
+
+        if (cancelled || !context?.dimensions) {
+          return;
+        }
+
+        setCurrentPage(context.dimensions);
+        setCount(suggestSlideCount(context.dimensions, DEFAULT_FORMAT));
+      } catch {
+        // A starting guess is a nicety; never let it take the panel down.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const target = useMemo(() => compositeSize(count, format), [count, format]);
   const plan = useMemo(() => planCarouselPage(count, format), [count, format]);
@@ -273,14 +301,30 @@ export const App = () => {
         />
 
         <Text size="small" tone="tertiary">
-          {intl.formatMessage(
-            {
-              defaultMessage:
-                "{count} slides side by side is {width} × {height} px.",
-              description: "The full size of the artwork for this carousel",
-            },
-            { count, width: target.width, height: target.height },
-          )}
+          {currentPage
+            ? intl.formatMessage(
+                {
+                  defaultMessage:
+                    "This page is {pageWidth} × {pageHeight} px, which fits {count} slides of {width} × {height}.",
+                  description:
+                    "Relates the current page size to the chosen slide count",
+                },
+                {
+                  pageWidth: currentPage.width,
+                  pageHeight: currentPage.height,
+                  count,
+                  width: format.width,
+                  height: format.height,
+                },
+              )
+            : intl.formatMessage(
+                {
+                  defaultMessage:
+                    "{count} slides side by side is {width} × {height} px.",
+                  description: "The full size of the artwork for this carousel",
+                },
+                { count, width: target.width, height: target.height },
+              )}
         </Text>
 
         {source ? (
@@ -398,19 +442,32 @@ export const App = () => {
             <Preview url={source.previewUrl} count={count} format={format} />
 
             {source.pageCount != null && source.pageCount > 1 && (
-              <Alert tone="info">
-                {intl.formatMessage(
-                  {
-                    defaultMessage:
-                      "Your design has {pages} pages. Splitting page {page}, the widest one.",
-                    description:
-                      "Shown when the exported design had more than one page",
-                  },
-                  {
-                    pages: source.pageCount,
-                    page: (source.pageIndex ?? 0) + 1,
-                  },
-                )}
+              <Alert tone={source.pageAmbiguous ? "warn" : "info"}>
+                {source.pageAmbiguous
+                  ? intl.formatMessage(
+                      {
+                        defaultMessage:
+                          "Page {page} of {pages} was taken, but another page is the same shape, so check it is the one you meant.",
+                        description:
+                          "Shown when more than one page matched the current page's shape",
+                      },
+                      {
+                        pages: source.pageCount,
+                        page: (source.pageIndex ?? 0) + 1,
+                      },
+                    )
+                  : intl.formatMessage(
+                      {
+                        defaultMessage:
+                          "Splitting page {page} of {pages}, the one you have open.",
+                        description:
+                          "Shown when the exported design had more than one page",
+                      },
+                      {
+                        pages: source.pageCount,
+                        page: (source.pageIndex ?? 0) + 1,
+                      },
+                    )}
               </Alert>
             )}
 
