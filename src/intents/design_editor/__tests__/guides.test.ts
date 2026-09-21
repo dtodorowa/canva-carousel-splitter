@@ -1,6 +1,7 @@
 import { openDesign } from "@canva/design";
 import {
   GUIDE_COLOR,
+  normalizeHex,
   SAFE_MARGIN_FRACTION,
   buildGuideGroup,
   guideLines,
@@ -172,6 +173,11 @@ describe("isGuideElement", () => {
     expect(isGuideElement(shape(GUIDE_COLOR))).toBe(true);
   });
 
+  it("recognises the colour however Canva spells it", () => {
+    expect(isGuideElement(shape(`${GUIDE_COLOR}FF`))).toBe(true);
+    expect(isGuideElement(rect(`${GUIDE_COLOR.toLowerCase()}80`))).toBe(true);
+  });
+
   it("recognises a guide that came back as a rect", () => {
     expect(isGuideElement(rect(GUIDE_COLOR))).toBe(true);
   });
@@ -242,6 +248,89 @@ describe("isGuideElement", () => {
       expect(isGuideElement({ ...sliver, height: 200 }, 1350)).toBe(false);
       expect(isGuideElement({ ...sliver, top: 300 }, 1350)).toBe(false);
     });
+  });
+});
+
+describe("normalizeHex", () => {
+  it("passes plain six-digit hex through, upper-cased", () => {
+    expect(normalizeHex("#ff3dda")).toBe("#FF3DDA");
+    expect(normalizeHex("#FF3DDA")).toBe("#FF3DDA");
+  });
+
+  it("drops an alpha suffix, which is how a colour can come back", () => {
+    expect(normalizeHex("#FF3DDAFF")).toBe("#FF3DDA");
+    expect(normalizeHex("#ff3dda80")).toBe("#FF3DDA");
+  });
+
+  it("expands shorthand", () => {
+    expect(normalizeHex("#f3d")).toBe("#FF33DD");
+    expect(normalizeHex("#f3da")).toBe("#FF33DD");
+  });
+
+  it("copes with a missing hash and stray whitespace", () => {
+    expect(normalizeHex(" ff3dda ")).toBe("#FF3DDA");
+  });
+
+  it("rejects anything that is not hex", () => {
+    expect(normalizeHex("rgb(255,61,218)")).toBeUndefined();
+    expect(normalizeHex("")).toBeUndefined();
+    expect(normalizeHex("#12")).toBeUndefined();
+  });
+});
+
+describe("recognising a guide group by shape", () => {
+  const sliver = (width = 4) => ({ type: "rect", width, height: 1350 });
+
+  it("matches a group of nothing but full-height slivers", () => {
+    const group = {
+      type: "group",
+      contents: { toArray: () => [sliver(), sliver(2), sliver(2)] },
+    };
+
+    expect(isGuideElement(group, 1350)).toBe(true);
+  });
+
+  it("needs the page height before it will guess", () => {
+    const group = {
+      type: "group",
+      contents: { toArray: () => [sliver(), sliver(), sliver()] },
+    };
+
+    expect(isGuideElement(group)).toBe(false);
+  });
+
+  it("spares a group holding anything of real width", () => {
+    const group = {
+      type: "group",
+      contents: {
+        toArray: () => [
+          sliver(),
+          sliver(),
+          { type: "image", width: 900, height: 1350 },
+        ],
+      },
+    };
+
+    expect(isGuideElement(group, 1350)).toBe(false);
+  });
+
+  it("spares a group of slivers that do not span the page", () => {
+    const short = { type: "rect", width: 4, height: 200 };
+    const group = {
+      type: "group",
+      contents: { toArray: () => [short, short, short] },
+    };
+
+    expect(isGuideElement(group, 1350)).toBe(false);
+  });
+
+  it("still prefers the colour when it is there", () => {
+    const group = {
+      type: "group",
+      contents: { toArray: () => [shape(GUIDE_COLOR), shape(GUIDE_COLOR)] },
+    };
+
+    expect(isGuideElement(group)).toBe(true);
   });
 });
 
@@ -334,7 +423,7 @@ describe("removeGuides", () => {
     const { removed, seen } = await removeGuides();
 
     expect(removed).toBe(0);
-    expect(seen).toEqual(["rect #123456", "text"]);
+    expect(seen).toEqual(["rect #123456", "text no-fill"]);
   });
 
   it("does nothing on a page type it cannot edit", async () => {

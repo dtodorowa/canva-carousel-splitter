@@ -126,10 +126,37 @@ export function guideBounds(
 }
 
 /**
- * Every solid fill colour on an element, upper-cased.
+ * Reduce a colour to `#RRGGBB`, upper-cased.
  *
- * Rects carry one fill directly; shapes carry one per path. A guide added
- * through `addPage` can come back as either, so read both rather than assume.
+ * Canva may hand back a shorthand or an alpha suffix for a colour written as
+ * plain six-digit hex, so comparing the strings directly is not safe.
+ */
+export function normalizeHex(color: string): string | undefined {
+  const match = /^#?([0-9a-f]{3,8})$/i.exec(color.trim());
+
+  if (!match?.[1]) {
+    return undefined;
+  }
+
+  const digits = match[1].toUpperCase();
+
+  if (digits.length === 3 || digits.length === 4) {
+    return `#${digits
+      .slice(0, 3)
+      .split("")
+      .map((d) => d + d)
+      .join("")}`;
+  }
+
+  return digits.length >= 6 ? `#${digits.slice(0, 6)}` : undefined;
+}
+
+/**
+ * Every solid fill colour on an element, normalised.
+ *
+ * Rects carry one fill directly, shapes carry one per path, and a group keeps
+ * them a level down in its contents. A guide added through `addPage` can come
+ * back as any of these, so read all of them rather than assume.
  */
 function solidColors(element: unknown, depth = 0): string[] {
   const found: string[] = [];
@@ -137,14 +164,19 @@ function solidColors(element: unknown, depth = 0): string[] {
     const container = (fill as { colorContainer?: unknown } | undefined)
       ?.colorContainer as { type?: string; color?: string } | undefined;
 
-    if (container?.type === "solid" && typeof container.color === "string") {
-      found.push(container.color.toUpperCase());
+    if (typeof container?.color === "string") {
+      const hex = normalizeHex(container.color);
+
+      if (hex) {
+        found.push(hex);
+      }
     }
   };
 
   const candidate = element as {
     fill?: unknown;
     paths?: { toArray?: () => readonly { fill?: unknown }[] };
+    contents?: { toArray?: () => readonly unknown[] };
   };
 
   record(candidate?.fill);
@@ -155,14 +187,8 @@ function solidColors(element: unknown, depth = 0): string[] {
     }
   }
 
-  // Guides are added as one group, so the fills live a level down. Bounded in
-  // case a design nests groups deeply.
-  const contents = (
-    element as { contents?: { toArray?: () => readonly unknown[] } } | undefined
-  )?.contents;
-
-  if (depth < 4 && typeof contents?.toArray === "function") {
-    for (const child of contents.toArray()) {
+  if (depth < 4 && typeof candidate?.contents?.toArray === "function") {
+    for (const child of candidate.contents.toArray()) {
       found.push(...solidColors(child, depth + 1));
     }
   }
@@ -170,40 +196,58 @@ function solidColors(element: unknown, depth = 0): string[] {
   return found;
 }
 
-/** A full-height sliver at the very top of the page, the shape a guide is. */
-function looksLikeGuideGeometry(element: unknown, pageHeight: number): boolean {
-  const { top, width, height } = (element ?? {}) as Partial<{
-    top: number;
+function children(element: unknown): readonly unknown[] {
+  const contents = (
+    element as { contents?: { toArray?: () => readonly unknown[] } } | undefined
+  )?.contents;
+
+  return typeof contents?.toArray === "function" ? contents.toArray() : [];
+}
+
+/** A full-height sliver: the shape every guide has. */
+function isSliver(element: unknown, pageHeight: number): boolean {
+  const { width, height } = (element ?? {}) as Partial<{
     width: number;
     height: number;
   }>;
 
   return (
-    typeof top === "number" &&
     typeof width === "number" &&
     typeof height === "number" &&
-    Math.abs(top) < 1 &&
     width <= 8 &&
-    Math.abs(height - pageHeight) < 1
+    Math.abs(height - pageHeight) < 2
   );
 }
 
 /**
- * A guide is anything filled with the sentinel colour. An element Canva reports
- * as unsupported exposes no fill to check, so fall back to its shape — narrow
- * enough that only a full-height sliver qualifies.
+ * A guide is anything filled with the sentinel colour.
+ *
+ * Failing that, fall back to shape: a group of nothing but full-height slivers
+ * is what the guide overlay is, and what artwork rarely is. The fallback needs
+ * the page height, so it is skipped when that is unknown.
  */
 export function isGuideElement(element: unknown, pageHeight?: number): boolean {
   if (solidColors(element).includes(GUIDE_COLOR)) {
     return true;
   }
 
-  const type = (element as { type?: string } | undefined)?.type;
+  if (pageHeight == null) {
+    return false;
+  }
+
+  const kids = children(element);
+
+  if (kids.length >= 3 && kids.every((kid) => isSliver(kid, pageHeight))) {
+    return true;
+  }
+
+  const { type, top } = (element ?? {}) as { type?: string; top?: number };
 
   return (
     type === "unsupported" &&
-    pageHeight != null &&
-    looksLikeGuideGeometry(element, pageHeight)
+    typeof top === "number" &&
+    Math.abs(top) < 2 &&
+    isSliver(element, pageHeight)
   );
 }
 
@@ -251,6 +295,26 @@ export async function removeGuides(): Promise<GuideScan> {
 function describe(element: unknown): string {
   const type = (element as { type?: string } | undefined)?.type ?? "unknown";
   const colors = solidColors(element);
+  const kids = children(element);
+  const parts = [type];
 
-  return colors.length > 0 ? `${type} ${colors[0]}` : type;
+  if (kids.length > 0) {
+    const sizes = kids
+      .slice(0, 3)
+      .map((kid) => {
+        const { type: kidType, width } = (kid ?? {}) as {
+          type?: string;
+          width?: number;
+        };
+
+        return `${kidType ?? "?"}${typeof width === "number" ? `:${Math.round(width)}w` : ""}`;
+      })
+      .join("/");
+
+    parts.push(`[${kids.length}: ${sizes}]`);
+  }
+
+  parts.push(colors.length > 0 ? colors.slice(0, 2).join("/") : "no-fill");
+
+  return parts.join(" ");
 }
