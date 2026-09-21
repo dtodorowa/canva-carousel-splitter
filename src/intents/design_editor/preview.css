@@ -1,0 +1,7 @@
+.previewCanvas {
+  width: 100%;
+  height: auto;
+  display: block;
+  border-radius: var(--ui-kit-border-radius-large, 8px);
+  background: var(--ui-kit-color-neutral-low);
+}
