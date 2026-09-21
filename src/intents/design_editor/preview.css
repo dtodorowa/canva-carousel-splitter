@@ -1,7 +1,19 @@
-.previewCanvas {
+.previewFrame {
+  position: relative;
   width: 100%;
-  height: auto;
-  display: block;
+  overflow: hidden;
   border-radius: var(--ui-kit-border-radius-large, 8px);
-  background: var(--ui-kit-color-neutral-low);
+  background-color: var(--ui-kit-color-neutral-low);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+.previewSeam {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-left: 1px dashed rgba(255, 255, 255, 0.9);
+  pointer-events: none;
 }

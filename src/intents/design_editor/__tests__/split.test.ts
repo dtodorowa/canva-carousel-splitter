@@ -1,8 +1,11 @@
-import type { ImageUploadOptions } from "@canva/asset";
+/* eslint-disable formatjs/no-literal-string-in-object -- test fixtures, never shown to a user */
+import type { ImageRef, ImageUploadOptions } from "@canva/asset";
 import { upload } from "@canva/asset";
 import { addPage } from "@canva/design";
 import { PORTRAIT } from "../slicer";
 import { encodeCanvas, extractSlide, renderComposite } from "../slicer";
+import type { CarouselSource } from "../sources";
+import type { SplitMode } from "../split";
 import { addSlidesToDesign } from "../split";
 
 // The canvas half of the slicer needs a real browser, so stub it and keep the
@@ -21,19 +24,40 @@ const mockUpload = jest.mocked(upload);
 const mockAddPage = jest.mocked(addPage);
 
 const COUNT = 3;
-const COMPOSITE = {
-  width: PORTRAIT.width * COUNT,
-  height: PORTRAIT.height,
-} as HTMLCanvasElement;
+const WIDE = { width: PORTRAIT.width * COUNT, height: PORTRAIT.height };
+const COMPOSITE = WIDE as HTMLCanvasElement;
 
-const request = (mode: "slice" | "overflow") => ({
-  image: {} as HTMLImageElement,
+/** A local file: no ref, and a blob URL Canva's servers could never fetch. */
+const fileSource = (over: Partial<CarouselSource> = {}): CarouselSource => ({
+  kind: "upload",
+  label: "cascabelito.png",
+  ...WIDE,
+  previewUrl: "blob:localhost/abc",
+  loadPixels: async () => ({}) as HTMLImageElement,
+  ...over,
+});
+
+const request = (mode: SplitMode, source = fileSource()) => ({
+  source,
   count: COUNT,
   format: PORTRAIT,
   mode,
   name: "cascabelito",
   altTextFor: (index: number, total: number) => `slide ${index + 1}/${total}`,
 });
+
+type PlacedElement = {
+  ref: ImageRef;
+  top: number;
+  left: number;
+  width: number;
+  height: number;
+};
+
+const elements = () =>
+  mockAddPage.mock.calls.map(
+    ([opts]) => opts?.elements?.[0] as PlacedElement | undefined,
+  );
 
 describe("addSlidesToDesign", () => {
   beforeEach(() => {
@@ -44,11 +68,11 @@ describe("addSlidesToDesign", () => {
       dataUrl: "data:image/png;base64,AAA",
       thumbnailUrl: "data:image/jpeg;base64,BBB",
       mimeType: "image/png",
-      width: PORTRAIT.width,
-      height: PORTRAIT.height,
+      ...WIDE,
     });
     mockUpload.mockImplementation(
-      async () => ({ ref: "img-ref" }) as Awaited<ReturnType<typeof upload>>,
+      async () =>
+        ({ ref: "uploaded-ref" }) as Awaited<ReturnType<typeof upload>>,
     );
     mockAddPage.mockResolvedValue({} as Awaited<ReturnType<typeof addPage>>);
   });
@@ -79,10 +103,8 @@ describe("addSlidesToDesign", () => {
     it("places every slide flush at the page origin", async () => {
       await addSlidesToDesign(request("slice"));
 
-      for (const [opts] of mockAddPage.mock.calls) {
-        const element = opts?.elements?.[0];
+      for (const element of elements()) {
         expect(element).toMatchObject({
-          type: "image",
           top: 0,
           left: 0,
           width: PORTRAIT.width,
@@ -90,35 +112,89 @@ describe("addSlidesToDesign", () => {
         });
       }
     });
+
+    it("propagates an upload failure instead of leaving a half-built carousel", async () => {
+      mockUpload.mockRejectedValueOnce(new Error("upload exploded"));
+
+      await expect(addSlidesToDesign(request("slice"))).rejects.toThrow(
+        "upload exploded",
+      );
+      expect(mockAddPage).not.toHaveBeenCalled();
+    });
   });
 
-  describe("overflow mode", () => {
-    it("uploads the composite once and reuses the ref on every page", async () => {
+  describe("linked mode", () => {
+    it("reuses an existing Canva asset without uploading or touching pixels", async () => {
+      const loadPixels = jest.fn();
+      const source = fileSource({
+        kind: "selection",
+        ref: "already-in-canva" as ImageRef,
+        previewUrl: "https://canva.example/tmp.png",
+        loadPixels,
+      });
+
+      await addSlidesToDesign(request("overflow", source));
+
+      expect(mockUpload).not.toHaveBeenCalled();
+      expect(mockRenderComposite).not.toHaveBeenCalled();
+      expect(loadPixels).not.toHaveBeenCalled();
+      expect(elements().every((e) => e?.ref === "already-in-canva")).toBe(true);
+    });
+
+    it("hands a fetchable URL to Canva rather than downloading it first", async () => {
+      const loadPixels = jest.fn();
+      const source = fileSource({
+        kind: "design",
+        previewUrl: "https://export.canva.example/design.png",
+        mimeType: "image/png",
+        loadPixels,
+      });
+
+      await addSlidesToDesign(request("overflow", source));
+
+      expect(mockUpload).toHaveBeenCalledTimes(1);
+      expect(mockUpload.mock.calls[0]?.[0]).toMatchObject({
+        url: "https://export.canva.example/design.png",
+        mimeType: "image/png",
+      });
+      expect(loadPixels).not.toHaveBeenCalled();
+      expect(mockRenderComposite).not.toHaveBeenCalled();
+    });
+
+    it("flattens a local file to the carousel size before uploading it once", async () => {
       await addSlidesToDesign(request("overflow"));
 
       expect(mockUpload).toHaveBeenCalledTimes(1);
-      expect(mockAddPage).toHaveBeenCalledTimes(COUNT);
+      expect(mockRenderComposite).toHaveBeenCalledTimes(1);
       expect(mockExtractSlide).not.toHaveBeenCalled();
     });
 
-    it("steps each page one slide further left across the composite", async () => {
+    it("steps each page one slide further left across the artwork", async () => {
       await addSlidesToDesign(request("overflow"));
 
-      const lefts = mockAddPage.mock.calls.map(
-        ([opts]) => (opts?.elements?.[0] as { left: number } | undefined)?.left,
-      );
-
-      expect(lefts).toEqual([0, -PORTRAIT.width, -PORTRAIT.width * 2]);
+      expect(elements().map((e) => e?.left)).toEqual([
+        0,
+        -PORTRAIT.width,
+        -PORTRAIT.width * 2,
+      ]);
     });
 
-    it("sizes the element to the whole composite, not the page", async () => {
-      await addSlidesToDesign(request("overflow"));
-
-      const [opts] = mockAddPage.mock.calls[0] ?? [];
-      expect(opts?.elements?.[0]).toMatchObject({
-        width: COMPOSITE.width,
-        height: COMPOSITE.height,
+    it("cover-fits artwork whose aspect does not match the carousel", async () => {
+      // Twice as tall as it needs to be: Canva should scale to width and centre
+      // the overflow vertically, matching the slicer's own fit.
+      const tall = fileSource({
+        ref: "tall" as ImageRef,
+        width: PORTRAIT.width * COUNT,
+        height: PORTRAIT.height * 2,
       });
+
+      await addSlidesToDesign(request("overflow", tall));
+
+      for (const element of elements()) {
+        expect(element?.top).toBeCloseTo(-PORTRAIT.height / 2);
+        expect(element?.height).toBe(PORTRAIT.height * 2);
+        expect(element?.width).toBe(PORTRAIT.width * COUNT);
+      }
     });
   });
 
@@ -155,14 +231,5 @@ describe("addSlidesToDesign", () => {
       [2, COUNT],
       [3, COUNT],
     ]);
-  });
-
-  it("propagates an upload failure instead of leaving a half-built carousel", async () => {
-    mockUpload.mockRejectedValueOnce(new Error("upload exploded"));
-
-    await expect(addSlidesToDesign(request("slice"))).rejects.toThrow(
-      "upload exploded",
-    );
-    expect(mockAddPage).not.toHaveBeenCalled();
   });
 });

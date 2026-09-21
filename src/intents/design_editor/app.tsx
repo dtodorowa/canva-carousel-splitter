@@ -13,25 +13,32 @@ import {
   Text,
   Title,
 } from "@canva/app-ui-kit";
-import { addPage } from "@canva/design";
+import { addPage, requestExport } from "@canva/design";
 import { useCallback, useMemo, useState } from "react";
 import { useIntl } from "react-intl";
 import * as styles from "styles/components.css";
 import { Preview } from "./preview";
 import type { SlideFormat } from "./slicer";
-import type { SplitMode } from "./split";
-import { addSlidesToDesign } from "./split";
 import {
+  DEFAULT_FORMAT,
   MAX_SLIDES,
   MIN_SLIDES,
-  DEFAULT_FORMAT,
   SLIDE_FORMATS,
   clampSlideCount,
   cropWaste,
   exceedsCanvasLimit,
-  loadImage,
   suggestSlideCount,
 } from "./slicer";
+import type { CarouselSource, SourceKind } from "./sources";
+import {
+  ExportAbortedError,
+  NoSelectionError,
+  sourceFromDesign,
+  sourceFromFile,
+  sourceFromSelection,
+} from "./sources";
+import type { SplitMode } from "./split";
+import { addSlidesToDesign } from "./split";
 
 /** Above this, the cover fit is throwing away enough that the user should know. */
 const CROP_WARNING_THRESHOLD = 0.12;
@@ -46,9 +53,10 @@ export const App = () => {
   const intl = useIntl();
   const isSupported = useFeatureSupport();
   const canAddPages = isSupported(addPage);
+  const canExport = isSupported(requestExport);
 
-  const [file, setFile] = useState<File | undefined>();
-  const [image, setImage] = useState<HTMLImageElement | undefined>();
+  const [source, setSource] = useState<CarouselSource | undefined>();
+  const [loadingSource, setLoadingSource] = useState<SourceKind | undefined>();
   const [formatId, setFormatId] = useState<string>(DEFAULT_FORMAT.id);
   const [count, setCount] = useState(3);
   const [mode, setMode] = useState<SplitMode>("slice");
@@ -59,73 +67,72 @@ export const App = () => {
     [formatId],
   );
 
-  const formatLabels = useMemo(
-    () => ({
-      portrait: intl.formatMessage({
-        defaultMessage: "Portrait 4:5 — 1080×1350",
-        description: "Instagram portrait slide size option",
-      }),
-      square: intl.formatMessage({
-        defaultMessage: "Square 1:1 — 1080×1080",
-        description: "Instagram square slide size option",
-      }),
-      story: intl.formatMessage({
-        defaultMessage: "Story 9:16 — 1080×1920",
-        description: "Instagram story slide size option",
-      }),
-    }),
+  const describeError = useCallback(
+    (error: unknown): string => {
+      if (error instanceof NoSelectionError) {
+        return intl.formatMessage({
+          defaultMessage:
+            "Select an image on the canvas first, then try again.",
+          description: "Shown when nothing is selected",
+        });
+      }
+
+      if (error instanceof ExportAbortedError) {
+        return intl.formatMessage({
+          defaultMessage: "Export cancelled.",
+          description: "Shown when the user dismisses the export dialog",
+        });
+      }
+
+      if (error instanceof Error) {
+        return error.message;
+      }
+
+      return intl.formatMessage({
+        defaultMessage: "Something went wrong.",
+        description: "Generic failure message",
+      });
+    },
     [intl],
   );
 
-  const onSelectFile = useCallback(
-    async (files: File[]) => {
-      const picked = files[0];
-
-      if (!picked) {
-        return;
-      }
-
+  const adopt = useCallback(
+    async (kind: SourceKind, load: () => Promise<CarouselSource>) => {
+      setLoadingSource(kind);
       setStatus({ kind: "idle" });
 
       try {
-        const loaded = await loadImage(picked);
-        setFile(picked);
-        setImage(loaded);
-        setCount(suggestSlideCount(loaded, format));
+        const next = await load();
+        setSource(next);
+        setCount(suggestSlideCount(next, format));
       } catch (error) {
-        setStatus({
-          kind: "error",
-          message:
-            error instanceof Error
-              ? error.message
-              : intl.formatMessage({
-                  defaultMessage: "That file could not be read as an image.",
-                  description: "Error shown when the chosen file cannot load",
-                }),
-        });
+        setStatus({ kind: "error", message: describeError(error) });
+      } finally {
+        setLoadingSource(undefined);
       }
     },
-    [format, intl],
+    [format, describeError],
   );
 
-  const clearFile = useCallback(() => {
-    setFile(undefined);
-    setImage(undefined);
+  const clearSource = useCallback(() => {
+    setSource(undefined);
     setStatus({ kind: "idle" });
   }, []);
 
   const waste = useMemo(
-    () => (image ? cropWaste(image, count, format) : undefined),
-    [image, count, format],
+    () => (source ? cropWaste(source, count, format) : undefined),
+    [source, count, format],
   );
 
+  // Linked mode lets Canva do the scaling, so the browser canvas cap only
+  // applies when we have to cut the artwork up ourselves.
   const tooLarge = useMemo(
-    () => exceedsCanvasLimit(count, format),
-    [count, format],
+    () => mode === "slice" && exceedsCanvasLimit(count, format),
+    [mode, count, format],
   );
 
   const split = useCallback(async () => {
-    if (!image || !canAddPages) {
+    if (!source || !canAddPages) {
       return;
     }
 
@@ -133,11 +140,11 @@ export const App = () => {
 
     try {
       await addSlidesToDesign({
-        image,
+        source,
         count,
         format,
         mode,
-        name: file?.name.replace(/\.[^.]+$/, "") || "carousel",
+        name: source.label.replace(/\.[^.]+$/, "") || "carousel",
         altTextFor: (index, total) =>
           intl.formatMessage(
             {
@@ -152,20 +159,12 @@ export const App = () => {
 
       setStatus({ kind: "done", count });
     } catch (error) {
-      setStatus({
-        kind: "error",
-        message:
-          error instanceof Error
-            ? error.message
-            : intl.formatMessage({
-                defaultMessage: "Something went wrong while adding the slides.",
-                description: "Generic failure message",
-              }),
-      });
+      setStatus({ kind: "error", message: describeError(error) });
     }
-  }, [image, canAddPages, count, format, mode, file, intl]);
+  }, [source, canAddPages, count, format, mode, intl, describeError]);
 
   const busy = status.kind === "working";
+  const picking = loadingSource != null;
 
   return (
     <div className={styles.scrollContainer}>
@@ -180,7 +179,7 @@ export const App = () => {
           <Text size="small" tone="tertiary">
             {intl.formatMessage({
               defaultMessage:
-                "Drop in one wide image and it becomes a run of slides, cut so the artwork carries across the swipe.",
+                "Take one wide piece of artwork and cut it into slides, so it carries across the swipe.",
               description: "One-line explanation of what the app does",
             })}
           </Text>
@@ -197,24 +196,77 @@ export const App = () => {
           </Alert>
         )}
 
-        {file ? (
+        {source ? (
           <FileInputItem
-            label={file.name}
-            onDeleteClick={clearFile}
+            label={sourceLabel(source, intl)}
+            onDeleteClick={clearSource}
             disabled={busy}
           />
         ) : (
-          <FileInput
-            accept={["image/png", "image/jpeg", "image/webp"]}
-            multiple={false}
-            stretchButton
-            onDropAcceptedFiles={onSelectFile}
-          />
+          <Rows spacing="1u">
+            <FileInput
+              accept={["image/png", "image/jpeg", "image/webp"]}
+              multiple={false}
+              stretchButton
+              disabled={picking}
+              onDropAcceptedFiles={(files) => {
+                const picked = files[0];
+
+                if (picked) {
+                  void adopt("upload", () => sourceFromFile(picked));
+                }
+              }}
+            />
+            <Button
+              variant="secondary"
+              stretch
+              disabled={picking || !canExport}
+              loading={loadingSource === "design"}
+              onClick={() => void adopt("design", sourceFromDesign)}
+            >
+              {intl.formatMessage({
+                defaultMessage: "Use current design",
+                description:
+                  "Button that exports the open design as the source",
+              })}
+            </Button>
+            <Button
+              variant="secondary"
+              stretch
+              disabled={picking}
+              loading={loadingSource === "selection"}
+              onClick={() => void adopt("selection", sourceFromSelection)}
+            >
+              {intl.formatMessage({
+                defaultMessage: "Use selected image",
+                description:
+                  "Button that uses the image selected on the canvas as the source",
+              })}
+            </Button>
+          </Rows>
         )}
 
-        {image && (
+        {status.kind === "error" && !source && (
+          <Alert tone="critical">{status.message}</Alert>
+        )}
+
+        {source && (
           <Rows spacing="2u">
-            <Preview image={image} count={count} format={format} />
+            <Preview url={source.previewUrl} count={count} format={format} />
+
+            {source.pageCount != null && source.pageCount > 1 && (
+              <Alert tone="info">
+                {intl.formatMessage(
+                  {
+                    defaultMessage:
+                      "Your design has {pages} pages. Only the first one is being split.",
+                    description:
+                      "Shown when the exported design had more than one page",
+                  },
+                  { pages: source.pageCount },
+                )}
+              </Alert>
+            )}
 
             <FormField
               label={intl.formatMessage({
@@ -229,7 +281,7 @@ export const App = () => {
                   disabled={busy}
                   options={SLIDE_FORMATS.map((f) => ({
                     value: f.id,
-                    label: formatLabels[f.id as keyof typeof formatLabels],
+                    label: formatLabel(f, intl),
                   }))}
                   onChange={(value) => setFormatId(value)}
                 />
@@ -309,9 +361,9 @@ export const App = () => {
                 {intl.formatMessage(
                   {
                     defaultMessage:
-                      "About {percent}% of your image falls outside {count} slides at this size. Change the slide count, or resize the source to {width}×{height}.",
+                      "About {percent}% of the artwork falls outside {count} slides at this size. Change the slide count, or resize the source to {width}×{height}.",
                     description:
-                      "Warning that the source image does not match the chosen slide layout",
+                      "Warning that the source does not match the chosen slide layout",
                   },
                   {
                     percent: Math.round(waste.fraction * 100),
@@ -327,7 +379,7 @@ export const App = () => {
               <Alert tone="critical">
                 {intl.formatMessage({
                   defaultMessage:
-                    "That many slides at this size is too big for the browser to render in one piece. Use fewer slides.",
+                    "That many slides at this size is too big for the browser to cut up. Use fewer slides, or switch to Linked.",
                   description:
                     "Warning that the composite exceeds canvas limits",
                 })}
@@ -397,3 +449,57 @@ export const App = () => {
     </div>
   );
 };
+
+/** Falls back to a translated name when the source has no natural title. */
+function sourceLabel(
+  source: CarouselSource,
+  intl: ReturnType<typeof useIntl>,
+): string {
+  if (source.label) {
+    return source.label;
+  }
+
+  return source.kind === "selection"
+    ? intl.formatMessage({
+        defaultMessage: "Selected image",
+        description: "Name for artwork taken from the canvas selection",
+      })
+    : intl.formatMessage({
+        defaultMessage: "Current design",
+        description: "Name for artwork taken from the open design",
+      });
+}
+
+function formatLabel(
+  format: SlideFormat,
+  intl: ReturnType<typeof useIntl>,
+): string {
+  const dimensions = `${format.width}×${format.height}`;
+
+  switch (format.id) {
+    case "square":
+      return intl.formatMessage(
+        {
+          defaultMessage: "Square 1:1 — {dimensions}",
+          description: "Instagram square slide size option",
+        },
+        { dimensions },
+      );
+    case "story":
+      return intl.formatMessage(
+        {
+          defaultMessage: "Story 9:16 — {dimensions}",
+          description: "Instagram story slide size option",
+        },
+        { dimensions },
+      );
+    default:
+      return intl.formatMessage(
+        {
+          defaultMessage: "Portrait 4:5 — {dimensions}",
+          description: "Instagram portrait slide size option",
+        },
+        { dimensions },
+      );
+  }
+}

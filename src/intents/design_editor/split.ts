@@ -1,7 +1,15 @@
+import type { ImageRef } from "@canva/asset";
 import { upload } from "@canva/asset";
 import { addPage } from "@canva/design";
 import type { SlideFormat } from "./slicer";
-import { encodeCanvas, extractSlide, renderComposite } from "./slicer";
+import {
+  compositeSize,
+  encodeCanvas,
+  extractSlide,
+  fitCover,
+  renderComposite,
+} from "./slicer";
+import type { CarouselSource } from "./sources";
 
 export type SplitMode =
   /** Every slide is cut out and uploaded as its own image. */
@@ -10,7 +18,7 @@ export type SplitMode =
   | "overflow";
 
 export type SplitRequest = {
-  image: HTMLImageElement;
+  source: CarouselSource;
   count: number;
   format: SlideFormat;
   mode: SplitMode;
@@ -20,59 +28,115 @@ export type SplitRequest = {
   onProgress?: (done: number, total: number) => void;
 };
 
-export async function addSlidesToDesign({
-  image,
+type PlacedAsset = { ref: ImageRef; width: number; height: number };
+
+export async function addSlidesToDesign(request: SplitRequest): Promise<void> {
+  if (request.mode === "overflow") {
+    return addLinked(request);
+  }
+
+  return addSliced(request);
+}
+
+/**
+ * One asset behind every page, positioned so each page frames its own slide.
+ *
+ * Canva does the scaling, which means an artwork already in the user's account
+ * never has to be downloaded, re-encoded, or re-uploaded — and slicing a source
+ * the browser isn't allowed to read still works.
+ */
+async function addLinked({
+  source,
   count,
   format,
-  mode,
   name,
   altTextFor,
   onProgress,
 }: SplitRequest): Promise<void> {
-  const composite = renderComposite(image, count, format);
-  const dimensions = { width: format.width, height: format.height };
+  const asset = await resolveLinkedAsset(source, count, format, name);
+  const target = compositeSize(count, format);
+  const fit = fitCover(asset, target);
 
-  const altText = (index: number) => ({
-    text: altTextFor(index, count),
-    decorative: false,
-  });
+  for (let i = 0; i < count; i++) {
+    await addPage({
+      dimensions: { width: format.width, height: format.height },
+      elements: [
+        {
+          type: "image",
+          ref: asset.ref,
+          altText: { text: altTextFor(i, count), decorative: false },
+          top: fit.offsetY,
+          // Slide i's window onto the artwork; the rest hangs off-page and
+          // Canva clips it at the page boundary.
+          left: fit.offsetX - i * format.width,
+          width: fit.drawWidth,
+          height: fit.drawHeight,
+        },
+      ],
+    });
+    onProgress?.(i + 1, count);
+  }
+}
 
-  if (mode === "overflow") {
-    const encoded = encodeCanvas(composite);
+/**
+ * Get the artwork into the design as a single asset, doing the least work the
+ * source allows.
+ */
+async function resolveLinkedAsset(
+  source: CarouselSource,
+  count: number,
+  format: SlideFormat,
+  name: string,
+): Promise<PlacedAsset> {
+  // Already an asset in the user's account. Nothing to transfer.
+  if (source.ref) {
+    return { ref: source.ref, width: source.width, height: source.height };
+  }
+
+  // A URL Canva's own servers can fetch, so the bytes never enter the browser.
+  if (/^https?:/.test(source.previewUrl)) {
     const { ref } = await upload({
       type: "image",
-      mimeType: encoded.mimeType,
-      url: encoded.dataUrl,
-      thumbnailUrl: encoded.thumbnailUrl,
-      width: encoded.width,
-      height: encoded.height,
+      mimeType: source.mimeType ?? "image/png",
+      url: source.previewUrl,
+      thumbnailUrl: source.previewUrl,
+      width: source.width,
+      height: source.height,
       name,
       aiDisclosure: "none",
     });
 
-    for (let i = 0; i < count; i++) {
-      await addPage({
-        dimensions,
-        elements: [
-          {
-            type: "image",
-            ref,
-            altText: altText(i),
-            top: 0,
-            // Slide i shows the i-th window; everything else hangs off-page and
-            // Canva clips it at the page boundary. Subtracting from 0 keeps the
-            // first slide at +0 rather than -0.
-            left: 0 - i * format.width,
-            width: composite.width,
-            height: composite.height,
-          },
-        ],
-      });
-      onProgress?.(i + 1, count);
-    }
-
-    return;
+    return { ref, width: source.width, height: source.height };
   }
+
+  // A local file. Flatten it to the carousel's exact size before uploading,
+  // which also keeps it inside the 10MB data URL cap.
+  const composite = renderComposite(await source.loadPixels(), count, format);
+  const encoded = encodeCanvas(composite);
+  const { ref } = await upload({
+    type: "image",
+    mimeType: encoded.mimeType,
+    url: encoded.dataUrl,
+    thumbnailUrl: encoded.thumbnailUrl,
+    width: encoded.width,
+    height: encoded.height,
+    name,
+    aiDisclosure: "none",
+  });
+
+  return { ref, width: encoded.width, height: encoded.height };
+}
+
+/** Cut the artwork into separate images, one asset and one page per slide. */
+async function addSliced({
+  source,
+  count,
+  format,
+  name,
+  altTextFor,
+  onProgress,
+}: SplitRequest): Promise<void> {
+  const composite = renderComposite(await source.loadPixels(), count, format);
 
   for (let i = 0; i < count; i++) {
     const encoded = encodeCanvas(extractSlide(composite, i, format));
@@ -88,12 +152,12 @@ export async function addSlidesToDesign({
     });
 
     await addPage({
-      dimensions,
+      dimensions: { width: format.width, height: format.height },
       elements: [
         {
           type: "image",
           ref,
-          altText: altText(i),
+          altText: { text: altTextFor(i, count), decorative: false },
           top: 0,
           left: 0,
           width: format.width,

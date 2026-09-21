@@ -3,9 +3,7 @@
 A Canva app that turns one wide image into a run of carousel slides, cut so
 artwork carries across the swipe.
 
-Draw the whole carousel as a single picture anywhere — Canva, Figma, Procreate —
-drop it into the app's side panel, and it adds one page per slide to the open
-design.
+Draw the whole carousel as one wide picture, then let the app cut it into pages.
 
 ## One-time setup
 
@@ -39,15 +37,31 @@ will say so if it can't.
 To get hot reload, set `CANVA_APP_ORIGIN` in `.env` from **Developer Portal →
 your app → Settings → Security**, and `CANVA_HMR_ENABLED=TRUE`.
 
+## Where the artwork comes from
+
+Three sources, picked in the panel:
+
+- **Upload** a file — made anywhere: Figma, Procreate, a screenshot.
+- **Use current design** — exports the open design as PNG and splits the first
+  page. Design the wide version in Canva, then cut it up in place.
+- **Use selected image** — takes whatever image is selected on the canvas.
+
+The selected-image case is the cheapest: the artwork is already an asset in your
+account, so linked mode reuses its ref and never downloads, re-encodes, or
+re-uploads anything.
+
 ## The two modes
 
 **Separate** cuts the composite into N images, uploads each one, and puts one on
 each page. Each slide is its own asset in your Uploads, editable on its own.
 
-**Linked** uploads the composite once and puts the same image on every page,
-offset one slide-width further left each time. Canva clips at the page boundary,
-so each page shows its own window onto one picture. Move the artwork on any page
-and the others still line up — useful while you're still nudging the composition.
+**Linked** puts one image on every page, offset one slide-width further left
+each time, sized so Canva's own scaling reproduces the cover fit. Canva clips at
+the page boundary, so each page shows its own window onto one picture. Move the
+artwork on any page and the others still line up.
+
+Linked never touches pixels in the browser, which is why it works on sources the
+browser isn't allowed to read (see below).
 
 ## Limits worth knowing
 
@@ -55,18 +69,23 @@ and the others still line up — useful while you're still nudging the compositi
   only when PNG would exceed that.
 - Canva pages must be 40–8000px per side and under 25M px of area. The slide
   presets are well inside this.
-- Browsers cap canvas size, which is what bounds the carousel at 10 slides.
+- Browsers cap canvas size, which is what bounds the carousel at 10 slides in
+  separate mode. Linked mode has no such limit.
+- Canva doesn't document CORS headers on exported-design URLs. If they're
+  missing, separate mode can't read the pixels back and says so; linked mode is
+  unaffected, because Canva's servers fetch the image rather than the browser.
 - Instagram shows carousel slides one at a time, not side by side. The
   continuity is an illusion of the swipe, so keep faces and words off the seams.
 
 ## Layout
 
-| File         | What's in it                                            |
-| ------------ | ------------------------------------------------------- |
-| `slicer.ts`  | Fit geometry and canvas work. Geometry is DOM-free.      |
-| `split.ts`   | Upload and page creation for both modes.                 |
-| `preview.tsx`| Panel-scale render of the composite with seams drawn on. |
-| `app.tsx`    | The panel UI.                                            |
+| File          | What's in it                                             |
+| ------------- | -------------------------------------------------------- |
+| `slicer.ts`   | Fit geometry and canvas work. Geometry is DOM-free.      |
+| `sources.ts`  | Upload, design export, and canvas selection as one type. |
+| `split.ts`    | Upload and page creation for both modes.                 |
+| `preview.tsx` | Seam overlay on a CSS cover fit — reads no pixels.       |
+| `app.tsx`     | The panel UI.                                            |
 
 All under `src/intents/design_editor/`.
 

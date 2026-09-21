@@ -1,62 +1,39 @@
-import { useEffect, useRef } from "react";
 import type { SlideFormat } from "./slicer";
-import { renderComposite } from "./slicer";
 import * as styles from "./preview.css";
 
-const PREVIEW_WIDTH = 288;
-
 type PreviewProps = {
-  image: HTMLImageElement;
+  url: string;
   count: number;
   format: SlideFormat;
 };
 
 /**
- * The composite as it will be cut, with the seams drawn on top. Rendered at
- * panel scale rather than full size so dragging the slide-count slider stays
- * responsive on a 10-slide carousel.
+ * The artwork as it will be cut, with the seams drawn on.
+ *
+ * `background-size: cover` on a box of the carousel's aspect ratio performs
+ * exactly the fit `fitCover` computes, so this stays truthful without reading a
+ * single pixel — which matters because an exported design may not be
+ * CORS-readable. It is a backdrop rather than an image element because the
+ * artwork here is decorative; the real content is the seam positions.
  */
-export const Preview = ({ image, count, format }: PreviewProps) => {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+export const Preview = ({ url, count, format }: PreviewProps) => {
+  const seams = Array.from({ length: count - 1 }, (_, i) => (i + 1) / count);
 
-  useEffect(() => {
-    const canvas = canvasRef.current;
-
-    if (!canvas) {
-      return;
-    }
-
-    const scale = PREVIEW_WIDTH / (format.width * count);
-    const scaled: SlideFormat = {
-      id: format.id,
-      width: Math.max(1, Math.round(format.width * scale)),
-      height: Math.max(1, Math.round(format.height * scale)),
-    };
-
-    const composite = renderComposite(image, count, scaled);
-    canvas.width = composite.width;
-    canvas.height = composite.height;
-
-    const ctx = canvas.getContext("2d");
-
-    if (!ctx) {
-      return;
-    }
-
-    ctx.drawImage(composite, 0, 0);
-
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
-    ctx.lineWidth = 1;
-    ctx.setLineDash([4, 3]);
-
-    for (let i = 1; i < count; i++) {
-      const x = i * scaled.width + 0.5;
-      ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, composite.height);
-      ctx.stroke();
-    }
-  }, [image, count, format]);
-
-  return <canvas ref={canvasRef} className={styles.previewCanvas} />;
+  return (
+    <div
+      className={styles.previewFrame}
+      style={{
+        aspectRatio: `${format.width * count} / ${format.height}`,
+        backgroundImage: `url(${JSON.stringify(url)})`,
+      }}
+    >
+      {seams.map((fraction) => (
+        <span
+          key={fraction}
+          className={styles.previewSeam}
+          style={{ left: `${fraction * 100}%` }}
+        />
+      ))}
+    </div>
+  );
 };

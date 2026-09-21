@@ -167,6 +167,35 @@ export type EncodedImage = {
 };
 
 /**
+ * Thrown when the source image came from a host that sends no CORS headers, so
+ * the browser refuses to let us read the pixels back out of the canvas.
+ */
+export class TaintedSourceError extends Error {
+  constructor() {
+    super(
+      "This image can't be read back out of the canvas because of browser security rules. Use Linked mode, which doesn't need to read the pixels.",
+    );
+    this.name = "TaintedSourceError";
+  }
+}
+
+function toDataUrl(
+  canvas: HTMLCanvasElement,
+  mimeType: string,
+  quality?: number,
+): string {
+  try {
+    return canvas.toDataURL(mimeType, quality);
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "SecurityError") {
+      throw new TaintedSourceError();
+    }
+
+    throw error;
+  }
+}
+
+/**
  * PNG first for clean edges on flat art, falling back to JPEG only when PNG
  * would blow the 10MB data URL cap that `upload()` enforces.
  */
@@ -174,14 +203,14 @@ function encode(canvas: HTMLCanvasElement): {
   dataUrl: string;
   mimeType: "image/png" | "image/jpeg";
 } {
-  const png = canvas.toDataURL("image/png");
+  const png = toDataUrl(canvas, "image/png");
 
   if (png.length <= MAX_DATA_URL_CHARS) {
     return { dataUrl: png, mimeType: "image/png" };
   }
 
   for (const quality of [0.92, 0.85, 0.75, 0.6]) {
-    const jpeg = canvas.toDataURL("image/jpeg", quality);
+    const jpeg = toDataUrl(canvas, "image/jpeg", quality);
 
     if (jpeg.length <= MAX_DATA_URL_CHARS) {
       return { dataUrl: jpeg, mimeType: "image/jpeg" };
@@ -208,7 +237,7 @@ function encodeThumbnail(canvas: HTMLCanvasElement, maxWidth = 320): string {
 
   ctx.drawImage(canvas, 0, 0, thumb.width, thumb.height);
 
-  return thumb.toDataURL("image/jpeg", 0.8);
+  return toDataUrl(thumb, "image/jpeg", 0.8);
 }
 
 export function encodeCanvas(canvas: HTMLCanvasElement): EncodedImage {
@@ -249,6 +278,37 @@ export function extractSlide(
   );
 
   return canvas;
+}
+
+/**
+ * `crossOrigin` decides whether the decoded image can be read back after it is
+ * drawn. Requesting it fails outright on hosts that send no CORS headers, so
+ * callers that only need dimensions ask for it off.
+ */
+export async function loadImageFromUrl(
+  url: string,
+  { crossOrigin }: { crossOrigin: boolean },
+): Promise<HTMLImageElement> {
+  const image = new Image();
+
+  if (crossOrigin) {
+    image.crossOrigin = "anonymous";
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    image.onload = () => resolve();
+    image.onerror = () =>
+      reject(
+        crossOrigin
+          ? new TaintedSourceError()
+          : new Error("Could not load the image."),
+      );
+    image.src = url;
+  });
+
+  await image.decode().catch(() => undefined);
+
+  return image;
 }
 
 export async function loadImage(file: File): Promise<HTMLImageElement> {
